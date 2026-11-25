@@ -1,0 +1,37 @@
+{
+  "name": "hood-warfare-2",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:server": "node src/server/index.ts",
+    "dev:all": "node scripts/dev.mjs",
+    "build:client": "tsc --noEmit && vite build",
+    "build:server": "tsc -p tsconfig.server.json",
+    "build": "npm run build:client && npm run build:server",
+    "start:server": "node dist-server/server/index.js",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint",
+    "lint:ritmo": "ritmo-devtools lint src/lint.ts",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run lint && npm run lint:ritmo && npm run test"
+  },
+  "dependencies": {
+    "@typeonce/ritmo": "^0.27.0",
+    "three": "^0.187.0",
+    "ws": "^8.23.0"
+  },
+  "devDependencies": {
+    "@typeonce/oxlint-plugin-ritmo": "^0.27.0",
+    "@typeonce/ritmo-devtools": "^0.27.0",
+    "@types/node": "^22.15.0",
+    "@types/three": "^0.187.0",
+    "@types/ws": "^8.18.2",
+    "oxlint": "^1.95.0",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.8",
+    "vitest": "^4.1.12"
+  }
+}
