@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://unrealumanga.github.io/hood-warfare-2/sitemap.xml
