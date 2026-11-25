@@ -176,3 +176,8 @@ export const MAPS: Readonly<Record<MapId, MapDef>> = {
 export function sanitizeMapId(value: unknown): MapId {
   return value === "overprintHall" ? "overprintHall" : "bellYard"
 }
+
+/** Map definition for any id (unknown or missing ids, e.g. from an older server snapshot, get Bell Yard). */
+export function mapForId(value: unknown): MapDef {
+  return MAPS[sanitizeMapId(value)]
+}

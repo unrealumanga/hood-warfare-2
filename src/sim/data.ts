@@ -440,8 +440,14 @@ export interface BotSkill {
 }
 
 /** Difficulty level 0..10 -> aim error, trigger discipline and engagement range. Plain +,-,* only (deterministic). */
+export function sanitizeDifficulty(raw: unknown): number {
+  const n = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN
+  if (!Number.isFinite(n)) return DIFFICULTY_DEFAULT
+  return Math.min(DIFFICULTY_MAX, Math.max(DIFFICULTY_MIN, Math.round(n)))
+}
+
 export function botSkill(level: number): BotSkill {
-  const t = Math.min(DIFFICULTY_MAX, Math.max(DIFFICULTY_MIN, level)) / DIFFICULTY_MAX
+  const t = Math.min(DIFFICULTY_MAX, Math.max(DIFFICULTY_MIN, Number.isFinite(level) ? level : DIFFICULTY_DEFAULT)) / DIFFICULTY_MAX
   return {
     jitterYaw: 0.32 - 0.285 * t, // level 0: 0.32 rad, 10: 0.035 (the old fixed value was 0.085)
     jitterPitch: 0.22 - 0.195 * t,

@@ -1,4 +1,4 @@
-import { MAPS, type MapDef, type MapBox } from "../sim/index.ts"
+import { MAPS, mapForId, type MapDef, type MapBox } from "../sim/index.ts"
 import { addOverprintDetails } from "./overprintDetails.ts"
 import { addYardDetails } from "./yardDetails.ts"
 import * as THREE from "three"
@@ -806,7 +806,7 @@ export class BellYardScene {
     }
 
     const speedMult = ARMORS[localFighter.armorType].speedMultiplier
-    const extraSolids = snapshot ? buildDynamicSolids(snapshot.constructs, snapshot.cableCar, MAPS[snapshot.mapId]) : []
+    const extraSolids = snapshot ? buildDynamicSolids(snapshot.constructs, snapshot.cableCar, mapForId(snapshot.mapId)) : []
     this.predictedKin = stepPlayerMovement(
       this.predictedKin,
       {
@@ -817,7 +817,7 @@ export class BellYardScene {
       },
       speedMult,
       1 / TICK_HZ,
-      { map: snapshot ? MAPS[snapshot.mapId] : this.mapDef, extraSolids, anomalyActive: snapshot?.anomalyActive ?? false }
+      { map: snapshot ? mapForId(snapshot.mapId) : this.mapDef, extraSolids, anomalyActive: snapshot?.anomalyActive ?? false }
     )
     this.pendingInputs.push(input)
     if (this.pendingInputs.length > 90) {
@@ -827,7 +827,7 @@ export class BellYardScene {
 
   /** Reconcile local predicted kinematics when an authoritative server snapshot arrives */
   public reconcileSnapshot(snapshot: MatchSnapshot, localSlotId: number, isOnline: boolean): void {
-    this.setMap(MAPS[snapshot.mapId])
+    this.setMap(mapForId(snapshot.mapId))
     const local = snapshot.fighters.find((f) => f.slotId === localSlotId)
     if (!local || !local.alive) {
       this.predictedKin = null
@@ -854,7 +854,7 @@ export class BellYardScene {
       grounded: local.grounded
     }
     const speedMult = ARMORS[local.armorType].speedMultiplier
-    const extraSolids = buildDynamicSolids(snapshot.constructs, snapshot.cableCar, MAPS[snapshot.mapId])
+    const extraSolids = buildDynamicSolids(snapshot.constructs, snapshot.cableCar, mapForId(snapshot.mapId))
     for (const inp of this.pendingInputs) {
       state = stepPlayerMovement(
         state,
@@ -866,7 +866,7 @@ export class BellYardScene {
         },
         speedMult,
         1 / TICK_HZ,
-        { map: MAPS[snapshot.mapId], extraSolids, anomalyActive: snapshot.anomalyActive }
+        { map: mapForId(snapshot.mapId), extraSolids, anomalyActive: snapshot.anomalyActive }
       )
     }
 
@@ -918,7 +918,7 @@ export class BellYardScene {
     this.lastRenderMs = now
 
     if (snapshot) {
-      this.setMap(MAPS[snapshot.mapId])
+      this.setMap(mapForId(snapshot.mapId))
       this.processEvents(snapshot, localSlotId)
       this.syncActiveMural(snapshot, now)
       this.syncMilestoneActors(snapshot, localSlotId, now)

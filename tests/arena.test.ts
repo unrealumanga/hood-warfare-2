@@ -151,6 +151,18 @@ describe("Difficulty ramp", () => {
     expect(readSnapshot(boot(5, [human(0)], -4)).difficulty).toBe(0)
   })
 
+  it("survives garbage difficulty values without NaN positions (found by fuzzing)", () => {
+    for (const bad of [Number.NaN, Infinity, -Infinity, "9" as unknown as number, undefined as unknown as number]) {
+      const rt = boot(31, [human(0)], bad)
+      tickN(rt, 200)
+      const snap = readSnapshot(rt)
+      expect(Number.isFinite(snap.difficulty)).toBe(true)
+      expect(snap.difficulty).toBeGreaterThanOrEqual(0)
+      expect(snap.difficulty).toBeLessThanOrEqual(DIFFICULTY_MAX)
+      for (const f of snap.fighters) expect(Number.isFinite(f.x) && Number.isFinite(f.z)).toBe(true)
+    }
+  })
+
   it("rises by one step per DIFFICULTY_KILLS_PER_STEP cobalt kills and never past the max", () => {
     const rt = boot(6, allHumans, 3)
     edit(rt, { fighter: (f) => (f.slotId === 0 ? { ...f, kills: DIFFICULTY_KILLS_PER_STEP * 2 } : f) })

@@ -15,7 +15,7 @@ import {
   HATS,
   HAT_IDS,
   Intent,
-  MAPS,
+  mapForId,
   sanitizeMapId,
   type MapId,
   type SketchAnchorPair,
@@ -977,7 +977,7 @@ class HoodWarfareApp {
     const me = this.currentSnapshot.fighters.find((f) => f.slotId === this.localSlotId)
     if (!me || !me.alive) return null
 
-    const placementBounds = MAPS[this.currentSnapshot.mapId].placementBounds
+    const placementBounds = mapForId(this.currentSnapshot.mapId).placementBounds
     const sinY = Math.sin(this.localYaw)
     const cosY = Math.cos(this.localYaw)
     const cosP = Math.cos(this.localPitch)
@@ -991,7 +991,7 @@ class HoodWarfareApp {
       // Prefer aimed Sketch Anchor pair if within range & view cone
       let bestAnchor: SketchAnchorPair | null = null
       let bestDot = 0.72
-      for (const a of MAPS[this.currentSnapshot.mapId].sketchAnchors) {
+      for (const a of mapForId(this.currentSnapshot.mapId).sketchAnchors) {
         for (const [ax, ay, az] of [
           [a.ax, a.ay, a.az],
           [a.bx, a.by, a.bz]
@@ -1413,7 +1413,7 @@ class HoodWarfareApp {
         const actor = this.currentSnapshot?.fighters.find((f) => f.slotId === ev.actorSlot)
         const target = this.currentSnapshot?.fighters.find((f) => f.slotId === ev.targetSlot)
         if (actor && target) {
-          const gunName = ev.gunId ? GUNS[ev.gunId].name : "Ink"
+          const gunName = ev.gunId ? (GUNS[ev.gunId]?.name ?? "Ink") : "Ink"
           const isBossKill = Boolean(
             target.isBoss ||
             target.name === BOSS_NAME ||
@@ -1590,7 +1590,7 @@ class HoodWarfareApp {
       pill.className = `hud-mural-pill ${snap.zoneStatus}`
       this.q("#hud-mural-state").textContent = "COLOSSUS PRESS"
     } else {
-      const zone = MAPS[snap.mapId].muralZones[snap.activeMuralId]!
+      const zone = mapForId(snap.mapId).muralZones[snap.activeMuralId]!
       this.q("#hud-mural-name").textContent = zone.name.toUpperCase()
       this.q("#hud-mural-timer").textContent = formatClock(snap.muralRotateTicksLeft)
       pill.className = `hud-mural-pill ${snap.zoneStatus}`
@@ -1727,7 +1727,7 @@ class HoodWarfareApp {
         const aimY = Math.sin(this.localPitch)
         const aimZ = -cosY * cosP
         const eyeY = me.y + PLAYER_EYE_HEIGHT
-        for (const l of MAPS[snap.mapId].grappleLedges) {
+        for (const l of mapForId(snap.mapId).grappleLedges) {
           const dx = l.x - me.x
           const dy = l.y - eyeY
           const dz = l.z - me.z
