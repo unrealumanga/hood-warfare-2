@@ -5,16 +5,17 @@ import {
   CREWS,
   DEFAULT_COSMETICS,
   DEFAULT_LOADOUT,
-  GRAPPLE_LEDGES,
   GRAPPLE_RANGE,
   GUNS,
   HATS,
   HAT_IDS,
   Intent,
-  MURAL_ZONES,
+  MAPS,
+  sanitizeMapId,
+  type MapId,
+  type SketchAnchorPair,
   PLAYER_EYE_HEIGHT,
   PRIMARY_GUN_IDS,
-  SKETCH_ANCHORS,
   SKETCH_ERASE_RANGE,
   STEP,
   SWATCHES,
@@ -52,6 +53,7 @@ const STORAGE_KEY = "hw2_profile_v2"
 
 interface SavedProfile {
   version: 2
+  mapId: MapId
   name: string
   loadout: CombatLoadout
   cosmetics: CosmeticLoadout
@@ -69,6 +71,7 @@ function loadProfile(): SavedProfile {
       const p = JSON.parse(raw) as Record<string, unknown>
       return {
         version: 2,
+        mapId: sanitizeMapId(p["mapId"]),
         name:
           typeof p["name"] === "string" && p["name"].trim().length > 0
             ? p["name"].trim().slice(0, 18)
@@ -96,6 +99,7 @@ function loadProfile(): SavedProfile {
   }
   return {
     version: 2,
+    mapId: "bellYard",
     name: "Printer",
     loadout: DEFAULT_LOADOUT,
     cosmetics: DEFAULT_COSMETICS,
@@ -166,6 +170,7 @@ class HoodWarfareApp {
   private pendingSmokeId = 0
   private pendingGrappleId = 0
   private pendingGrappleReleaseId = 0
+  private selectedMapId: MapId = this.profile.mapId
   private selectedOfflineMode: GameModeId = "mural"
   private selectedAnomaly = false
   private selectedStakeEquip = false
@@ -393,7 +398,7 @@ class HoodWarfareApp {
 
           <div class="ink-row" style="margin-bottom:12px">
             <label style="font-size:12px;font-weight:700">CALLSIGN</label>
-            <input id="player-name-input" class="ink-input" maxlength="18" value="${this.profile.name}" style="width:180px" />
+            <input id="player-name-input" class="ink-input" maxlength="18" style="width:180px" />
             <button id="btn-open-locker" class="ink-btn">Locker &amp; Loadout</button>
           </div>
 
@@ -402,10 +407,14 @@ class HoodWarfareApp {
               <div class="ink-section-label" style="margin-top:0">Local Arcade &amp; Solo Modes</div>
               <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
                 <select id="offline-mode-select" class="ink-input" style="flex:1;font-size:12px;padding:6px 8px">
-                  <option value="mural">3v3 Mural Control (Bell Yard)</option>
+                  <option value="mural">3v3 Mural Control</option>
                   <option value="eliteDuel">Elite Duel · Shielded Foreman</option>
                   <option value="extraction">Solo Extraction · Press Vault</option>
                   <option value="foundry">3v3 Foundry Skirmish · Siege Press</option>
+                </select>
+                <select id="map-select" class="ink-input" aria-label="Map for offline play or new room" style="flex:1;font-size:12px;padding:6px 8px">
+                  <option value="bellYard">Bell Yard</option>
+                  <option value="overprintHall">Overprint Hall</option>
                 </select>
               </div>
               <div style="display:flex;gap:12px;font-size:11px;margin-bottom:8px;flex-wrap:wrap">
@@ -542,6 +551,14 @@ class HoodWarfareApp {
     })
     void this.probeOnlineServer()
 
+    this.q<HTMLInputElement>("#player-name-input").value = this.profile.name
+    const mapSelect = this.q<HTMLSelectElement>("#map-select")
+    mapSelect.value = this.selectedMapId
+    mapSelect.addEventListener("change", () => {
+      this.selectedMapId = sanitizeMapId(mapSelect.value)
+      this.profile.mapId = this.selectedMapId
+      saveProfile(this.profile)
+    })
     const modeSelect = this.q<HTMLSelectElement>("#offline-mode-select")
     const stakeWrap = this.q("#stake-wrap")
     modeSelect.addEventListener("change", () => {
@@ -567,7 +584,7 @@ class HoodWarfareApp {
       this.wsUrl = wsInput.value.trim() || resolveDefaultWsUrl()
       try {
         await this.net.connect(this.wsUrl)
-        this.net.createRoom(this.profile.name, this.profile.loadout, this.profile.cosmetics)
+        this.net.createRoom(this.profile.name, this.profile.loadout, this.profile.cosmetics, this.selectedMapId)
       } catch {
         // onError displays recoverable message
       }
@@ -912,6 +929,7 @@ class HoodWarfareApp {
     const me = this.currentSnapshot.fighters.find((f) => f.slotId === this.localSlotId)
     if (!me || !me.alive) return null
 
+    const placementBounds = MAPS[this.currentSnapshot.mapId].placementBounds
     const sinY = Math.sin(this.localYaw)
     const cosY = Math.cos(this.localYaw)
     const cosP = Math.cos(this.localPitch)
@@ -923,9 +941,9 @@ class HoodWarfareApp {
 
     if (this.sketchPreviewMode === "plank") {
       // Prefer aimed Sketch Anchor pair if within range & view cone
-      let bestAnchor: (typeof SKETCH_ANCHORS)[number] | null = null
+      let bestAnchor: SketchAnchorPair | null = null
       let bestDot = 0.72
-      for (const a of SKETCH_ANCHORS) {
+      for (const a of MAPS[this.currentSnapshot.mapId].sketchAnchors) {
         for (const [ax, ay, az] of [
           [a.ax, a.ay, a.az],
           [a.bx, a.by, a.bz]
@@ -964,8 +982,8 @@ class HoodWarfareApp {
         }
       }
       // Increment 1: Free ink plank placement ahead
-      const cx = Math.max(-24, Math.min(24, me.x - sinY * 2.8))
-      const cz = Math.max(-15.5, Math.min(18.5, me.z - cosY * 2.8))
+      const cx = Math.max(placementBounds.minX, Math.min(placementBounds.maxX, me.x - sinY * 2.8))
+      const cz = Math.max(placementBounds.minZ, Math.min(placementBounds.maxZ, me.z - cosY * 2.8))
       const overlaps = this.currentSnapshot.constructs.some(
         (c) => cx + 1.1 > c.minX && cx - 1.1 < c.maxX && cz + 1.4 > c.minZ && cz - 1.4 < c.maxZ && Math.abs(me.y - c.maxY) < 0.8
       )
@@ -987,8 +1005,8 @@ class HoodWarfareApp {
     }
 
     // Increment 2: Waist-high temporary barricade sharing sketch ink budget
-    const cx = Math.max(-24, Math.min(24, me.x - sinY * 2.1))
-    const cz = Math.max(-15.5, Math.min(18.5, me.z - cosY * 2.1))
+    const cx = Math.max(placementBounds.minX, Math.min(placementBounds.maxX, me.x - sinY * 2.1))
+    const cz = Math.max(placementBounds.minZ, Math.min(placementBounds.maxZ, me.z - cosY * 2.1))
     const wideAlongX = Math.abs(cosY) >= Math.abs(sinY)
     const halfX = wideAlongX ? 1.15 : 0.22
     const halfZ = wideAlongX ? 0.22 : 1.15
@@ -1054,6 +1072,7 @@ class HoodWarfareApp {
     const runtime = makeMatchRuntime({
       seed: Math.floor(Math.random() * 900_000) + 1000,
       mode: this.selectedOfflineMode,
+      mapId: this.selectedMapId,
       anomalyEnabled: this.selectedAnomaly,
       equipmentStaked: this.selectedOfflineMode === "extraction" && this.selectedStakeEquip,
       initialHumans: [
@@ -1455,7 +1474,7 @@ class HoodWarfareApp {
       pill.className = `hud-mural-pill ${snap.zoneStatus}`
       this.q("#hud-mural-state").textContent = "COLOSSUS PRESS"
     } else {
-      const zone = MURAL_ZONES[snap.activeMuralId]!
+      const zone = MAPS[snap.mapId].muralZones[snap.activeMuralId]!
       this.q("#hud-mural-name").textContent = zone.name.toUpperCase()
       this.q("#hud-mural-timer").textContent = formatClock(snap.muralRotateTicksLeft)
       pill.className = `hud-mural-pill ${snap.zoneStatus}`
@@ -1557,7 +1576,7 @@ class HoodWarfareApp {
         const aimY = Math.sin(this.localPitch)
         const aimZ = -cosY * cosP
         const eyeY = me.y + PLAYER_EYE_HEIGHT
-        for (const l of GRAPPLE_LEDGES) {
+        for (const l of MAPS[snap.mapId].grappleLedges) {
           const dx = l.x - me.x
           const dy = l.y - eyeY
           const dz = l.z - me.z

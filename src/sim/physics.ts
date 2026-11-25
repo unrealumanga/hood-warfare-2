@@ -8,7 +8,8 @@ import {
   PLAYER_STEP_HEIGHT,
   SMOKE_DENSITY_THRESHOLD
 } from "./data.ts"
-import { ANOMALY_COURTYARD, MAP_SOLIDS, type MapBox } from "./map.ts"
+import type { MapBox } from "./map.ts"
+import { MAPS, type MapDef } from "./maps.ts"
 
 export interface KinematicState {
   readonly x: number
@@ -40,6 +41,7 @@ export interface SmokeGridLike {
 }
 
 export interface MovementOptions {
+  readonly map?: MapDef
   readonly extraSolids?: ReadonlyArray<MapBox>
   readonly gravityScale?: number
   readonly anomalyActive?: boolean
@@ -59,9 +61,10 @@ function isAreaFree(
   z: number,
   r: number,
   h: number,
-  extraSolids: ReadonlyArray<MapBox>
+  extraSolids: ReadonlyArray<MapBox>,
+  map: MapDef
 ): boolean {
-  for (const box of MAP_SOLIDS) {
+  for (const box of map.solids) {
     if (overlapsCylinderXZ(x, z, r, box) && overlapsVertical(y, h, box)) {
       return false
     }
@@ -74,14 +77,14 @@ function isAreaFree(
   return true
 }
 
-export function isPointInAnomalyCourtyard(x: number, y: number, z: number): boolean {
+export function isPointInAnomalyCourtyard(x: number, y: number, z: number, map = MAPS.bellYard): boolean {
   return (
-    x >= ANOMALY_COURTYARD.minX &&
-    x <= ANOMALY_COURTYARD.maxX &&
-    y >= ANOMALY_COURTYARD.minY &&
-    y <= ANOMALY_COURTYARD.maxY &&
-    z >= ANOMALY_COURTYARD.minZ &&
-    z <= ANOMALY_COURTYARD.maxZ
+    x >= map.anomalyCourtyard.minX &&
+    x <= map.anomalyCourtyard.maxX &&
+    y >= map.anomalyCourtyard.minY &&
+    y <= map.anomalyCourtyard.maxY &&
+    z >= map.anomalyCourtyard.minZ &&
+    z <= map.anomalyCourtyard.maxZ
   )
 }
 
@@ -96,6 +99,7 @@ export function stepPlayerMovement(
   dt: number,
   opts: MovementOptions = {}
 ): KinematicState {
+  const map = opts.map ?? MAPS.bellYard
   const extraSolids = opts.extraSolids ?? []
   const fwd = Math.max(-1, Math.min(1, input.moveForward))
   const right = Math.max(-1, Math.min(1, input.moveRight))
@@ -116,7 +120,7 @@ export function stepPlayerMovement(
   if (prev.grounded && input.jump) {
     vy = PLAYER_JUMP_SPEED
   }
-  const inAnomaly = opts.anomalyActive === true && isPointInAnomalyCourtyard(prev.x, prev.y, prev.z)
+  const inAnomaly = opts.anomalyActive === true && isPointInAnomalyCourtyard(prev.x, prev.y, prev.z, map)
   const gravScale = opts.gravityScale ?? (inAnomaly ? 0.42 : 1.0)
   vy -= PLAYER_GRAVITY * gravScale * dt
 
@@ -126,12 +130,12 @@ export function stepPlayerMovement(
 
   // 1. Horizontal move X with stair auto step-up
   const tryX = x + vx * dt
-  if (isAreaFree(tryX, y, z, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids)) {
+  if (isAreaFree(tryX, y, z, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids, map)) {
     x = tryX
   } else {
     let stepped = false
     for (let stepY = 0.16; stepY <= PLAYER_STEP_HEIGHT + 0.01; stepY += 0.16) {
-      if (isAreaFree(tryX, y + stepY, z, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids)) {
+      if (isAreaFree(tryX, y + stepY, z, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids, map)) {
         x = tryX
         y += stepY
         stepped = true
@@ -139,7 +143,7 @@ export function stepPlayerMovement(
       }
     }
     if (!stepped) {
-      for (const list of [MAP_SOLIDS, extraSolids] as const) {
+      for (const list of [map.solids, extraSolids] as const) {
         for (const box of list) {
           if (overlapsCylinderXZ(tryX, z, PLAYER_RADIUS, box) && overlapsVertical(y, PLAYER_HEIGHT, box)) {
             if (vx > 0) x = Math.min(x, box.minX - PLAYER_RADIUS - 0.001)
@@ -152,12 +156,12 @@ export function stepPlayerMovement(
 
   // 2. Horizontal move Z with stair auto step-up
   const tryZ = z + vz * dt
-  if (isAreaFree(x, y, tryZ, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids)) {
+  if (isAreaFree(x, y, tryZ, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids, map)) {
     z = tryZ
   } else {
     let stepped = false
     for (let stepY = 0.16; stepY <= PLAYER_STEP_HEIGHT + 0.01; stepY += 0.16) {
-      if (isAreaFree(x, y + stepY, tryZ, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids)) {
+      if (isAreaFree(x, y + stepY, tryZ, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids, map)) {
         z = tryZ
         y += stepY
         stepped = true
@@ -165,7 +169,7 @@ export function stepPlayerMovement(
       }
     }
     if (!stepped) {
-      for (const list of [MAP_SOLIDS, extraSolids] as const) {
+      for (const list of [map.solids, extraSolids] as const) {
         for (const box of list) {
           if (overlapsCylinderXZ(x, tryZ, PLAYER_RADIUS, box) && overlapsVertical(y, PLAYER_HEIGHT, box)) {
             if (vz > 0) z = Math.min(z, box.minZ - PLAYER_RADIUS - 0.001)
@@ -181,7 +185,7 @@ export function stepPlayerMovement(
   const nextY = y + vy * dt
   if (vy <= 0) {
     let bestFloor = -1000
-    for (const list of [MAP_SOLIDS, extraSolids] as const) {
+    for (const list of [map.solids, extraSolids] as const) {
       for (const box of list) {
         if (!overlapsCylinderXZ(x, z, PLAYER_RADIUS, box)) continue
         if (box.maxY <= y + 0.12 && box.maxY >= nextY - 0.06) {
@@ -198,7 +202,7 @@ export function stepPlayerMovement(
     }
   } else {
     let hitCeiling = 1000
-    for (const list of [MAP_SOLIDS, extraSolids] as const) {
+    for (const list of [map.solids, extraSolids] as const) {
       for (const box of list) {
         if (!overlapsCylinderXZ(x, z, PLAYER_RADIUS, box)) continue
         if (box.minY >= y + PLAYER_HEIGHT - 0.08 && box.minY <= nextY + PLAYER_HEIGHT) {
@@ -214,8 +218,8 @@ export function stepPlayerMovement(
     }
   }
 
-  x = Math.max(-27.0, Math.min(27.0, x))
-  z = Math.max(-17.0, Math.min(20.5, z))
+  x = Math.max(map.movementBounds.minX, Math.min(map.movementBounds.maxX, x))
+  z = Math.max(map.movementBounds.minZ, Math.min(map.movementBounds.maxZ, z))
   if (y < 0) {
     y = 0
     vy = 0
@@ -344,9 +348,10 @@ export function sweepSegmentVsWorld(
   by: number,
   bz: number,
   inflate = 0,
-  extraSolids: ReadonlyArray<MapBox> = []
+  extraSolids: ReadonlyArray<MapBox> = [],
+  map = MAPS.bellYard
 ): { readonly t: number; readonly nx: number; readonly ny: number; readonly nz: number } | null {
-  const staticHit = sweepSegmentVsBoxes(ax, ay, az, bx, by, bz, MAP_SOLIDS, inflate)
+  const staticHit = sweepSegmentVsBoxes(ax, ay, az, bx, by, bz, map.solids, inflate)
   if (extraSolids.length === 0) return staticHit
   const dynHit = sweepSegmentVsBoxes(ax, ay, az, bx, by, bz, extraSolids, inflate)
   if (!staticHit) return dynHit
@@ -458,9 +463,10 @@ export function hasLineOfSight(
   by: number,
   bz: number,
   extraSolids: ReadonlyArray<MapBox> = [],
-  smokeClouds: ReadonlyArray<SmokeGridLike> = []
+  smokeClouds: ReadonlyArray<SmokeGridLike> = [],
+  map = MAPS.bellYard
 ): boolean {
-  if (sweepSegmentVsWorld(ax, ay, az, bx, by, bz, 0, extraSolids) !== null) return false
+  if (sweepSegmentVsWorld(ax, ay, az, bx, by, bz, 0, extraSolids, map) !== null) return false
   if (smokeClouds.length > 0 && isSegmentBlockedBySmoke(ax, ay, az, bx, by, bz, smokeClouds)) {
     return false
   }

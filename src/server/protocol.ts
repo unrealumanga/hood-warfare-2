@@ -1,3 +1,4 @@
+import type { MapId } from "../sim/maps.ts"
 import type { CombatLoadout, CosmeticLoadout, CrewId, MatchSnapshot, PlayerInput } from "../sim/index.ts"
 
 export interface RoomMemberInfo {
@@ -20,6 +21,7 @@ export interface RoomInfo {
 export type ClientMessage =
   | {
       readonly type: "createRoom"
+      readonly mapId?: MapId
       readonly name: string
       readonly loadout: CombatLoadout
       readonly cosmetics: CosmeticLoadout

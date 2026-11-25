@@ -1,3 +1,4 @@
+import type { MapId } from "./maps.ts"
 import { Clock, type Debug, Random } from "@typeonce/ritmo"
 import type { GameModeId } from "./data.ts"
 import { ReadMatchSnapshot, type MatchSnapshot } from "./inspectors.ts"
@@ -37,6 +38,7 @@ export interface MakeMatchOptions {
   readonly anomalyEnabled?: boolean
   readonly totalSlots?: number
   readonly equipmentStaked?: boolean
+  readonly mapId?: MapId
   readonly difficulty?: number
   readonly initialHumans?: ReadonlyArray<InitialHumanSpec> | null
   readonly debug?: Debug.Option
@@ -54,6 +56,7 @@ export function makeMatchRuntime(options: MakeMatchOptions = {}) {
         anomalyEnabled: options.anomalyEnabled,
         totalSlots: options.totalSlots,
         equipmentStaked: options.equipmentStaked,
+        mapId: options.mapId,
         difficulty: options.difficulty
       }),
       EventFeed: { items: [] },
@@ -82,3 +85,5 @@ export * from "./physics.ts"
 export * from "./schema.ts"
 export * from "./systems.ts"
 export * from "./inspectors.ts"
+
+export * from "./maps.ts"

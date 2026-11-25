@@ -1,3 +1,4 @@
+import type { MapId } from "./maps.ts"
 import { Clock, Descriptor, Random, Schema } from "@typeonce/ritmo"
 import {
   TICK_HZ,
@@ -281,6 +282,8 @@ export interface HealthPickupData {
 }
 
 export interface MatchStateData {
+  readonly mapId: MapId
+  readonly pendingMapId: MapId | null
   readonly mode: GameModeId
   readonly totalSlots: number
   readonly anomalyEnabled: boolean
@@ -396,6 +399,7 @@ export type MatchIntent =
       readonly anomalyEnabled?: boolean
       readonly totalSlots?: number
       readonly equipmentStaked?: boolean
+      readonly mapId?: MapId
       readonly difficulty?: number
       readonly initialHumans?: ReadonlyArray<InitialHumanSpec>
     }

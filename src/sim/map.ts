@@ -714,10 +714,10 @@ export const MAP_WAYPOINTS: ReadonlyArray<MapWaypoint> = [
   { id: 21, x: 24.0, y: 0, z: -11.5, neighbors: [19, 9] }
 ]
 
-export function findNearestWaypoint(x: number, y: number, z: number): number {
+export function findNearestWaypoint(x: number, y: number, z: number, waypoints = MAP_WAYPOINTS): number {
   let bestId = 0
   let bestDist = 1e9
-  for (const wp of MAP_WAYPOINTS) {
+  for (const wp of waypoints) {
     const dx = wp.x - x
     const dy = (wp.y - y) * 2.5 // prefer same vertical floor
     const dz = wp.z - z
@@ -734,14 +734,15 @@ export function findNearestWaypoint(x: number, y: number, z: number): number {
 export function nextWaypointToward(
   fromId: number,
   goalId: number,
-  extraEdges: ReadonlyArray<readonly [number, number]> = []
+  extraEdges: ReadonlyArray<readonly [number, number]> = [],
+  waypoints = MAP_WAYPOINTS
 ): number {
   if (fromId === goalId) return goalId
   const visited = new Set<number>([fromId])
   const queue: Array<{ readonly id: number; readonly firstStep: number }> = []
 
   const neighborsOf = (id: number): Array<number> => {
-    const wp = MAP_WAYPOINTS[id]
+    const wp = waypoints[id]
     const out = wp ? [...wp.neighbors] : []
     for (const [a, b] of extraEdges) {
       if (a === id) out.push(b)
@@ -771,10 +772,8 @@ export function nextWaypointToward(
   return goalId
 }
 
-export function muralWaypointId(muralId: 0 | 1 | 2): number {
-  if (muralId === 0) return 7
-  if (muralId === 1) return 20
-  return 12
+export function muralWaypointId(muralId: 0 | 1 | 2, waypoints = MAP_WAYPOINTS): number {
+  return waypoints.find((wp) => wp.muralId === muralId)!.id
 }
 
 // ── Milestone 1: Sketch Anchor Pairs (Distinct from Permanent Footbridge!) ──
