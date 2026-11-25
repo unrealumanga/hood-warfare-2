@@ -15,7 +15,10 @@ import {
   BOSS_SCALE,
   BOSS_SKILL_BONUS,
   BOSS_SPAWN_TICK,
+  BOSS_SCORE_MODES,
   BOT_SEEK_HEALTH_HP,
+  BOT_WP_PATIENCE_TICKS,
+  MULTI_MAP_MODES,
   DIFFICULTY_KILLS_PER_STEP,
   HEALTH_PICKUP_ARMOR,
   HEALTH_PICKUP_HEAL,
@@ -389,7 +392,9 @@ function makeFighterForSlot(
     lastHandledGrappleReleaseId: 0,
     lastInputSeq: 0,
     botStrafeDir: slotId % 2 === 0 ? 1 : -1,
-    botStrafeTicks: 40 + (slotId % 7) * 13
+    botStrafeTicks: 40 + (slotId % 7) * 13,
+    botWp: -1,
+    botWpTicks: 0
   }
 }
 
@@ -577,9 +582,10 @@ export const BootstrapMatch = Game.System(
       commands.despawn(entity)
     }
 
-    const mapId = prev.pendingMapId ?? prev.mapId
-    const map = MAPS[mapId]
     const mode = prev.pendingMode ?? prev.mode
+    // Elite Duel / Extraction layouts exist on Bell Yard only
+    const mapId = MULTI_MAP_MODES.includes(mode) ? (prev.pendingMapId ?? prev.mapId) : "bellYard"
+    const map = MAPS[mapId]
     const anomalyEnabled = prev.pendingAnomalyEnabled ?? prev.anomalyEnabled
     const totalSlots =
       mode === "eliteDuel"
@@ -623,7 +629,7 @@ export const BootstrapMatch = Game.System(
         totalSlots,
         equipmentStaked: prev.pendingEquipmentStake,
         mapId,
-        difficulty: prev.pendingDifficulty ?? prev.difficulty
+        difficulty: prev.pendingDifficulty ?? prev.baseDifficulty
       }),
       nextEventSeq: prev.nextEventSeq
     })
@@ -939,10 +945,35 @@ export const RunBotAI = Game.System(
         goalWpId = findNearestWaypoint(match.healthPickup.x, match.healthPickup.y, match.healthPickup.z, map.waypoints)
       }
 
-      const curWpId = findNearestWaypoint(bot.x, bot.y, bot.z, map.waypoints)
-      const nextWpId = nextWaypointToward(curWpId, goalWpId, dynamicEdges, map.waypoints)
+      // Keep walking to the chosen waypoint until it is reached (or patience runs out): re-picking the nearest
+      // waypoint every tick made bots on stairs flip back to the ground and never climb.
+      let heading = bot.botWp
+      let headingTicks = bot.botWpTicks
+      if (heading >= 0 && headingTicks > 0) {
+        const hw = map.waypoints[heading]!
+        const hd = Ops.hypot(Ops.hypot(hw.x - bot.x, hw.z - bot.z), hw.y - bot.y)
+        if (hd <= 0.9) heading = -1
+        else headingTicks -= 1
+      } else {
+        heading = -1
+      }
+      if (heading < 0) {
+        const curWpId = findNearestWaypoint(bot.x, bot.y, bot.z, map.waypoints)
+        heading = nextWaypointToward(curWpId, goalWpId, dynamicEdges, map.waypoints)
+        headingTicks = BOT_WP_PATIENCE_TICKS
+      }
+      const nextWpId = heading
       const nextWp = map.waypoints[nextWpId]!
-      const insideZone = match.mode === "mural" && isInsideMuralZone(bot, match.activeMuralId, map)
+      if (heading !== bot.botWp || headingTicks !== bot.botWpTicks) {
+        const latest = queries.fighters.data.fighter.get(entry.entity)
+        queries.fighters.data.fighter.set(entry.entity, { ...latest, botWp: heading, botWpTicks: headingTicks })
+      }
+      // The mural patrol must not override the boss hunt or a wounded bot going for the booster
+      const insideZone =
+        match.mode === "mural" &&
+        !bot.isBoss &&
+        !(pickupLive && bot.hp < BOT_SEEK_HEALTH_HP) &&
+        isInsideMuralZone(bot, match.activeMuralId, map)
 
       let navX = nextWp.x
       let navZ = nextWp.z
@@ -1517,12 +1548,12 @@ export const StepCombatAndMatch = Game.System(
     if (nextTick === BOSS_SPAWN_TICK && bossSlot < 0 && BOSS_MODES.includes(matchPrev.mode)) {
       let pick: (typeof fighterEntries)[number] | null = null
       for (const e of fighterEntries) {
-        if (e.data.crew !== 1 || !e.data.isBot) continue
+        if (e.data.crew !== 1 || !e.data.isBot || e.data.pendingHumanId !== null) continue
         if (pick === null || e.data.slotId < pick.data.slotId) pick = e
       }
       if (pick !== null) {
         const bf = pick.data
-        const bspawn = getSpawnForSlot(bf.slotId, matchPrev.totalSlots)
+        const bspawn = map.bossEntrance
         const bArmor = ARMORS[BOSS_ARMOR].maxArmor
         pick.data = {
           ...bf,
@@ -1594,10 +1625,10 @@ export const StepCombatAndMatch = Game.System(
             ...f,
             isBot: promotedHuman ? false : f.isBot,
             humanId: promotedHuman ? f.pendingHumanId : f.humanId,
-            name: f.isBoss
-              ? BOT_NAMES[f.slotId % BOT_NAMES.length]!
-              : promotedHuman
-                ? (f.pendingHumanName ?? f.name)
+            name: promotedHuman
+              ? (f.pendingHumanName ?? f.name)
+              : f.isBoss
+                ? BOT_NAMES[f.slotId % BOT_NAMES.length]!
                 : f.name,
             pendingHumanId: null,
             pendingHumanName: null,
@@ -2334,8 +2365,10 @@ export const StepCombatAndMatch = Game.System(
     let foundry = matchPrev.foundry
     let winner = matchPrev.winner
     let finishNow = false
-    if (bossDownCrew === 0) score0 += BOSS_KILL_SCORE
-    else if (bossDownCrew === 1) score1 += BOSS_KILL_SCORE
+    if (BOSS_SCORE_MODES.includes(matchPrev.mode)) {
+      if (bossDownCrew === 0) score0 += BOSS_KILL_SCORE
+      else if (bossDownCrew === 1) score1 += BOSS_KILL_SCORE
+    }
 
     if (matchPrev.mode === "mural") {
       let cobaltInZone = false

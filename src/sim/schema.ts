@@ -241,6 +241,8 @@ export interface FighterData {
   readonly lastInputSeq: number
   readonly botStrafeDir: number
   readonly botStrafeTicks: number
+  readonly botWp: number // waypoint the bot is currently heading for (-1 = none); kept until reached so it cannot flip-flop
+  readonly botWpTicks: number // ticks left before the bot gives up on botWp and re-plans
 }
 
 export interface ProjectileData {

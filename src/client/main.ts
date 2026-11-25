@@ -1219,6 +1219,9 @@ class HoodWarfareApp {
     this.stopAllLoops()
     this.scene.resetMatchState()
     this.clearKillfeed()
+    // An earlier offline result must not leak into this online round's result screen
+    this.matchRewardSettled = false
+    this.lastThreatProgression = null
     this.mode = "onlineMatch"
     this.menuOpen = false
     this.inputSeq = 0
@@ -1350,7 +1353,10 @@ class HoodWarfareApp {
       from: this.profile.campaignLevel,
       to: this.profile.campaignLevel
     }
-    threatEl.textContent = `Threat level ${prog.from} -> ${prog.to}`
+    threatEl.textContent =
+      this.mode === "offline" && (snap.mode === "mural" || snap.mode === "foundry")
+        ? `Threat level ${prog.from} -> ${prog.to}`
+        : ""
 
     const renderCrew = (crew: CrewId) =>
       snap.fighters
@@ -1414,11 +1420,8 @@ class HoodWarfareApp {
         const target = this.currentSnapshot?.fighters.find((f) => f.slotId === ev.targetSlot)
         if (actor && target) {
           const gunName = ev.gunId ? (GUNS[ev.gunId]?.name ?? "Ink") : "Ink"
-          const isBossKill = Boolean(
-            target.isBoss ||
-            target.name === BOSS_NAME ||
-            (this.currentSnapshot && target.slotId === this.currentSnapshot.bossSlot)
-          )
+          // Only the live boss counts: the old boss slot respawns as a normal bot afterwards
+          const isBossKill = Boolean(target.isBoss || target.name === BOSS_NAME)
           this.killfeed.push({
             id: ++this.killfeedSeq,
             killer: actor.name,
@@ -1542,8 +1545,8 @@ class HoodWarfareApp {
 
   private showPickupToast(damage: number): void {
     const el = this.pickupToastEl
-    const amt = damage > 0 ? damage : 60
-    el.textContent = `+${amt} HP`
+    // damage = HP actually restored; an armor-only top-up at full health must not claim healing
+    el.textContent = damage > 0 ? `+${damage} HP` : "+ARMOR"
     el.className = "pickup-toast"
     void el.offsetWidth
     el.className = "pickup-toast show"

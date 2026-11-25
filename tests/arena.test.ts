@@ -4,6 +4,7 @@ import {
   BOSS_HP,
   BOSS_KILL_SCORE,
   BOSS_NAME,
+  BOSS_SCALE,
   BOSS_SPAWN_TICK,
   DEFAULT_COSMETICS,
   DEFAULT_LOADOUT,
@@ -17,6 +18,7 @@ import {
   HEALTH_PICKUP_POS,
   HEALTH_PICKUP_RESPAWN_TICKS,
   Intent,
+  MAPS,
   MatchState,
   PLAYER_MAX_HP,
   RESPAWN_TICKS,
@@ -304,5 +306,128 @@ describe("Boss hit capsule", () => {
     }
     expect(place(false).hp).toBe(100) // missed: over the head
     expect(place(true).hp).toBeLessThan(BOSS_HP) // boss: 2.2 m is inside its 2.4 m body
+  })
+})
+
+describe("Review findings (Codex bug hunt)", () => {
+  const withMap = (seed: number, mapId: "bellYard" | "overprintHall", difficulty?: number, humans = [human(0)], mode?: "mural" | "foundry" | "eliteDuel") => {
+    const rt = makeMatchRuntime({ seed, mapId, difficulty, mode, initialHumans: humans })
+    expect(rt.tick(setupSchedule).ok).toBe(true)
+    return rt
+  }
+
+  it("boss enters at the active map's boss entrance, not Bell Yard's red spawn", () => {
+    for (const mapId of ["bellYard", "overprintHall"] as const) {
+      const rt = withMap(41, mapId)
+      edit(rt, { match: (m) => ({ ...m, tickCount: BOSS_SPAWN_TICK - 2 }) })
+      tickN(rt, 4)
+      const ev = readSnapshot(rt).events.find((e) => e.kind === "bossSpawn")!
+      expect(ev).toBeDefined()
+      const entrance = MAPS[mapId].bossEntrance
+      expect(Math.abs(ev.x - entrance.x)).toBeLessThan(0.01)
+      expect(Math.abs(ev.z - entrance.z)).toBeLessThan(0.01)
+      // and that entrance is not inside any solid box (boss capsule, scaled)
+      const r = 0.42 * BOSS_SCALE
+      for (const b of MAPS[mapId].solids) {
+        const inside = entrance.x > b.minX - r && entrance.x < b.maxX + r && entrance.z > b.minZ - r && entrance.z < b.maxZ + r && entrance.y + 2.4 > b.minY && entrance.y < b.maxY
+        expect(inside, `${mapId} boss entrance inside box ${b.id}`).toBe(false)
+      }
+    }
+  })
+
+  it("StartMatch without a difficulty restarts at the BASE level, not the ramped one", () => {
+    const rt = withMap(42, "bellYard", 2, allHumans)
+    edit(rt, { fighter: (f) => (f.slotId === 0 ? { ...f, kills: DIFFICULTY_KILLS_PER_STEP * 2 } : f) })
+    tickN(rt, 2)
+    expect(readSnapshot(rt).difficulty).toBe(4)
+    rt.send(Intent, { _tag: "StartMatch", seed: 77 })
+    tickN(rt, 3)
+    expect(readSnapshot(rt).difficulty).toBe(2)
+  })
+
+  it("boss promotion skips a red bot that has a human waiting for its slot", () => {
+    const rt = withMap(43, "bellYard", 2)
+    edit(rt, { fighter: (f) => (f.slotId === 3 ? { ...f, pendingHumanId: "waiting" } : f), match: (m) => ({ ...m, tickCount: BOSS_SPAWN_TICK - 2 }) })
+    tickN(rt, 4)
+    const snap = readSnapshot(rt)
+    expect(snap.fighters.find((f) => f.slotId === 3)!.isBoss).toBe(false)
+    expect(snap.bossSlot).toBe(4)
+  })
+
+  it("a human taking over the boss slot keeps their own name after the boss dies", () => {
+    const rt = withMap(44, "bellYard", 2)
+    edit(rt, { match: (m) => ({ ...m, tickCount: BOSS_SPAWN_TICK - 2 }) })
+    tickN(rt, 4)
+    edit(rt, { fighter: (f) => (f.slotId === 3 ? { ...f, alive: false, hp: 0, respawnTicksLeft: 2, pendingHumanId: "joiner", pendingHumanName: "Joiner" } : f) })
+    tickN(rt, 6)
+    const f = readSnapshot(rt).fighters.find((x) => x.slotId === 3)!
+    expect(f.name).toBe("Joiner")
+    expect(f.isBoss).toBe(false)
+  })
+
+  it("a boss kill in foundry does not touch the deposit-driven score", () => {
+    const rt = withMap(45, "bellYard", 2, [human(0, "linecaster")], "foundry")
+    edit(rt, { match: (m) => ({ ...m, tickCount: BOSS_SPAWN_TICK - 2 }) })
+    tickN(rt, 4)
+    const bossSlot = readSnapshot(rt).bossSlot
+    expect(bossSlot).toBeGreaterThanOrEqual(0)
+    edit(rt, {
+      fighter: (f) => {
+        if (f.slotId === 0) return { ...f, x: 0, y: 0, z: 5, yaw: 0, pitch: 0, hp: PLAYER_MAX_HP }
+        if (f.slotId === bossSlot) return { ...f, x: 0, y: 0, z: -1, hp: 1, armor: 0, yaw: Math.PI }
+        return { ...f, x: -24, y: 0, z: 14 + f.slotId * 0.01 }
+      }
+    })
+    const aim = Math.atan2(1.1 - 1.56, 6)
+    rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: input({ seq: 1, yaw: 0, pitch: aim, fire: true }) })
+    tickN(rt, 1)
+    rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: input({ seq: 2, yaw: 0, pitch: aim, fire: false }) })
+    for (let i = 0; i < 25; i++) {
+      edit(rt, { fighter: (f) => (f.slotId === bossSlot && f.alive ? { ...f, x: 0, y: 0, z: -1 } : f) })
+      tickN(rt, 1)
+    }
+    const snap = readSnapshot(rt)
+    expect(snap.bossDefeated).toBe(true) // the kill really happened...
+    expect(snap.scores[0]).toBeLessThan(BOSS_KILL_SCORE) // ...and gave no flat bonus the next deposit would erase
+  })
+
+  it("a wounded bot standing in the mural zone leaves it for the booster instead of patrolling", () => {
+    const rt = withMap(46, "bellYard", 2)
+    edit(rt, { match: (m) => ({ ...m, healthPickup: { ...m.healthPickup, available: true, respawnTicksLeft: 0 } }) })
+    edit(rt, {
+      fighter: (f) => {
+        // pin the patrol point at (-1.8, -1.2): 2.2 m from the booster, so only a deliberate trip can reach it
+        if (f.slotId === 1) return { ...f, x: -3.5, y: 0, z: 0, hp: 20, armor: 0, botStrafeDir: -1, botStrafeTicks: 100000 }
+        // everyone else stays dead (no respawn) so nothing can shoot or heal the test bot
+        return { ...f, x: -24, y: 0, z: 14 + f.slotId * 0.01, alive: f.slotId === 0, hp: f.slotId === 0 ? f.hp : 0, respawnTicksLeft: 1_000_000 }
+      }
+    })
+    tickN(rt, 400)
+    const bot = readSnapshot(rt).fighters.find((f) => f.slotId === 1)!
+    expect(bot.alive).toBe(true)
+    expect(bot.hp).toBe(20 + HEALTH_PICKUP_HEAL)
+  })
+
+  it("bots keep their waypoint instead of flip-flopping: they reach the upper mural on Overprint Hall", () => {
+    const rt = withMap(47, "overprintHall", 2)
+    const upper = MAPS.overprintHall.muralZones.findIndex((z) => z.y > 1)
+    expect(upper).toBeGreaterThanOrEqual(0)
+    edit(rt, { match: (m) => ({ ...m, activeMuralId: upper as 0 | 1 | 2 }) })
+    edit(rt, { fighter: (f) => (f.slotId === 1 ? { ...f, x: -8, y: 0, z: 0 } : { ...f, x: -24, y: 0, z: 14 + f.slotId * 0.01, alive: f.slotId === 1 }) })
+    let maxY = 0
+    for (let i = 0; i < 1500; i++) {
+      tickN(rt, 1)
+      const b = readSnapshot(rt).fighters.find((f) => f.slotId === 1)!
+      maxY = Math.max(maxY, b.y)
+    }
+    expect(maxY).toBeGreaterThan(MAPS.overprintHall.muralZones[upper]!.y - 0.8)
+  })
+
+  it("Elite Duel and Extraction always run on Bell Yard, whatever map was requested", () => {
+    for (const mode of ["eliteDuel", "extraction"] as const) {
+      const rt = withMap(48, "overprintHall", 2, [human(0)], mode as "eliteDuel")
+      expect(readSnapshot(rt).mapId).toBe("bellYard")
+    }
+    expect(readSnapshot(withMap(49, "overprintHall", 2, [human(0)], "foundry")).mapId).toBe("overprintHall")
   })
 })

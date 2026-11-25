@@ -455,3 +455,10 @@ export function botSkill(level: number): BotSkill {
     rangeScale: 0.6 + 0.4 * t
   }
 }
+
+/** Modes where the boss-kill score bonus applies (foundry scores are recomputed from deposits). */
+export const BOSS_SCORE_MODES: ReadonlyArray<GameModeId> = ["mural"]
+/** Ticks a bot keeps walking to its chosen waypoint before it re-plans (it re-plans sooner on arrival). */
+export const BOT_WP_PATIENCE_TICKS = 150
+/** Maps other than Bell Yard are only offered in these modes (the Foreman / vault layouts are Bell Yard only). */
+export const MULTI_MAP_MODES: ReadonlyArray<GameModeId> = ["mural", "foundry"]
