@@ -248,10 +248,18 @@ export const ARMORS: Record<ArmorId, ArmorDef> = {
 
 // ── Cosmetics (validated on client & server) ─────────────────────────────
 
-export const TOP_IDS = ["hoodie", "workJacket", "windbreaker"] as const
+export const TOP_IDS = [
+  "hoodie",
+  "workJacket",
+  "windbreaker",
+  "apron",
+  "vest",
+  "trench",
+  "tracksuit"
+] as const
 export type TopId = (typeof TOP_IDS)[number]
 
-export const HAT_IDS = ["cap", "beanie"] as const
+export const HAT_IDS = ["cap", "beanie", "bucket", "headband", "hardHat", "bareHead"] as const
 export type HatId = (typeof HAT_IDS)[number]
 
 export const SWATCH_IDS = [
@@ -261,19 +269,31 @@ export const SWATCH_IDS = [
   "ochre",
   "denim",
   "charcoal",
-  "gilded"
+  "gilded",
+  "brick",
+  "rust",
+  "teal",
+  "plum"
 ] as const
 export type SwatchId = (typeof SWATCH_IDS)[number]
 
 export const TOPS: Record<TopId, { readonly id: TopId; readonly name: string }> = {
   hoodie: { id: "hoodie", name: "Printworks Hoodie" },
   workJacket: { id: "workJacket", name: "Canvas Work Jacket" },
-  windbreaker: { id: "windbreaker", name: "Courier Windbreaker" }
+  windbreaker: { id: "windbreaker", name: "Courier Windbreaker" },
+  apron: { id: "apron", name: "Press Apron" },
+  vest: { id: "vest", name: "Courier Vest" },
+  trench: { id: "trench", name: "Foreman Trench Coat" },
+  tracksuit: { id: "tracksuit", name: "Runner Tracksuit" }
 } satisfies Record<TopId, { readonly id: TopId; readonly name: string }>
 
 export const HATS: Record<HatId, { readonly id: HatId; readonly name: string }> = {
   cap: { id: "cap", name: "Ink Cap" },
-  beanie: { id: "beanie", name: "Knit Beanie" }
+  beanie: { id: "beanie", name: "Knit Beanie" },
+  bucket: { id: "bucket", name: "Bucket Hat" },
+  headband: { id: "headband", name: "Pressman Headband" },
+  hardHat: { id: "hardHat", name: "Plant Hard Hat" },
+  bareHead: { id: "bareHead", name: "Bare Head" }
 } satisfies Record<HatId, { readonly id: HatId; readonly name: string }>
 
 export const SWATCHES: Record<
@@ -286,7 +306,11 @@ export const SWATCHES: Record<
   ochre: { id: "ochre", name: "Ochre Proof", hex: "#c7a974", trimHex: "#473b29" },
   denim: { id: "denim", name: "Blueprint Denim", hex: "#6f86a3", trimHex: "#26374d" },
   charcoal: { id: "charcoal", name: "Charcoal Galley", hex: "#4a534f", trimHex: "#e6e9e1" },
-  gilded: { id: "gilded", name: "Gilded Folio", hex: "#d6b35c", trimHex: "#2d2619" }
+  gilded: { id: "gilded", name: "Gilded Folio", hex: "#d6b35c", trimHex: "#2d2619" },
+  brick: { id: "brick", name: "Kiln Brick", hex: "#9c5a4c", trimHex: "#2e1b17" },
+  rust: { id: "rust", name: "Oxide Rust", hex: "#b55d36", trimHex: "#381a0e" },
+  teal: { id: "teal", name: "Ink Teal", hex: "#3b7d82", trimHex: "#162e2f" },
+  plum: { id: "plum", name: "Plum Proof", hex: "#73425f", trimHex: "#281522" }
 } satisfies Record<
   SwatchId,
   { readonly id: SwatchId; readonly name: string; readonly hex: string; readonly trimHex: string }
@@ -337,13 +361,18 @@ export function sanitizeLoadout(raw: unknown): CombatLoadout {
   return { primary, armor }
 }
 
-/** Cosmetics for a bot. Variety and per-crew palettes are the clothing worker's job (see agents brief). */
+export const COOL_BOT_SWATCHES = ["denim", "slate", "pine", "teal", "ivory"] as const
+export const WARM_BOT_SWATCHES = ["brick", "rust", "ochre", "charcoal", "plum"] as const
+
+/** Cosmetics for a bot. Deterministic pure function of (slotId, crew) with decorrelated picks and crew palettes. */
 export function botCosmetics(slotId: number, crew: CrewId): CosmeticLoadout {
-  return {
-    top: TOP_IDS[slotId % TOP_IDS.length]!,
-    hat: HAT_IDS[slotId % HAT_IDS.length]!,
-    swatch: SWATCH_IDS[(slotId + (crew === 0 ? 0 : 2)) % 6]!
-  }
+  const s = (slotId < 0 ? -slotId : slotId) | 0
+  const c = crew === 1 ? 1 : 0
+  const top = TOP_IDS[(s * 3 + c) % TOP_IDS.length]!
+  const hat = HAT_IDS[(s * 5 + c * 2 + 1) % HAT_IDS.length]!
+  const palette = c === 0 ? COOL_BOT_SWATCHES : WARM_BOT_SWATCHES
+  const swatch = palette[(s * 2 + c) % palette.length]!
+  return { top, hat, swatch }
 }
 
 export const BOT_NAMES: ReadonlyArray<string> = [

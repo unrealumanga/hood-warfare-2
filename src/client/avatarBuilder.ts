@@ -131,7 +131,7 @@ export function createAvatarRig(
 ): AvatarRig {
   const root = new THREE.Group()
   const crewDef = CREWS[crew]
-  const swatch = SWATCHES[cosmetics.swatch]
+  const swatch = SWATCHES[cosmetics.swatch] ?? SWATCHES.ivory
 
   const topMat = createInkMaterial(swatch.hex, { hatchStrength: 0.28 })
   const trimMat = createInkMaterial(swatch.trimHex, { hatchStrength: 0.2 })
@@ -162,36 +162,95 @@ export function createAvatarRig(
     return m
   }
 
+  const isVest = cosmetics.top === "vest"
+  const isTracksuit = cosmetics.top === "tracksuit"
+  const isTrench = cosmetics.top === "trench"
+  const isApron = cosmetics.top === "apron"
+
   // Legs (articulated at hip y = 0.78)
   const leftLeg = new THREE.Group()
   leftLeg.position.set(-0.14, 0.78, 0)
   addBox(leftLeg, 0.2, 0.74, 0.22, pantsMat, 0, -0.38, 0)
   addBox(leftLeg, 0.22, 0.12, 0.28, trimMat, 0, -0.72, -0.03)
+  if (isTracksuit) {
+    addBox(leftLeg, 0.02, 0.72, 0.06, trimMat, -0.105, -0.38, 0)
+  }
   root.add(leftLeg)
 
   const rightLeg = new THREE.Group()
   rightLeg.position.set(0.14, 0.78, 0)
   addBox(rightLeg, 0.2, 0.74, 0.22, pantsMat, 0, -0.38, 0)
   addBox(rightLeg, 0.22, 0.12, 0.28, trimMat, 0, -0.72, -0.03)
+  if (isTracksuit) {
+    addBox(rightLeg, 0.02, 0.72, 0.06, trimMat, 0.105, -0.38, 0)
+  }
   root.add(rightLeg)
 
   // Torso (y = 0.78 .. 1.40) shaped by chosen Top!
-  const torsoWidth = cosmetics.top === "workJacket" ? 0.56 : cosmetics.top === "hoodie" ? 0.54 : 0.50
+  const torsoWidth =
+    cosmetics.top === "workJacket" || isTrench
+      ? 0.56
+      : cosmetics.top === "hoodie"
+        ? 0.54
+        : isTracksuit || isApron
+          ? 0.52
+          : 0.50
   addBox(root, torsoWidth, 0.62, 0.30, topMat, 0, 1.09, 0, true)
 
-  if (cosmetics.top === "hoodie") {
-    // Draped hood collar + kangaroo front pocket
-    addBox(root, 0.34, 0.16, 0.22, topMat, 0, 1.38, 0.12)
-    addBox(root, 0.34, 0.18, 0.04, trimMat, 0, 0.94, -0.16)
-  } else if (cosmetics.top === "workJacket") {
-    // Structured collar lapels + twin canvas chest pockets
-    addBox(root, 0.42, 0.10, 0.26, trimMat, 0, 1.38, 0.02)
-    addBox(root, 0.14, 0.14, 0.04, trimMat, -0.14, 1.18, -0.16)
-    addBox(root, 0.14, 0.14, 0.04, trimMat, 0.14, 1.18, -0.16)
-  } else {
-    // Windbreaker: high funnel collar + diagonal team-tone chest stripe
-    addBox(root, 0.28, 0.13, 0.24, trimMat, 0, 1.40, 0)
-    addBox(root, torsoWidth + 0.01, 0.11, 0.31, crewMat, 0, 1.13, 0)
+  switch (cosmetics.top) {
+    case "hoodie": {
+      // Draped hood collar + kangaroo front pocket
+      addBox(root, 0.34, 0.16, 0.22, topMat, 0, 1.38, 0.12)
+      addBox(root, 0.34, 0.18, 0.04, trimMat, 0, 0.94, -0.16)
+      break
+    }
+    case "workJacket": {
+      // Structured collar lapels + twin canvas chest pockets
+      addBox(root, 0.42, 0.10, 0.26, trimMat, 0, 1.38, 0.02)
+      addBox(root, 0.14, 0.14, 0.04, trimMat, -0.14, 1.18, -0.16)
+      addBox(root, 0.14, 0.14, 0.04, trimMat, 0.14, 1.18, -0.16)
+      break
+    }
+    case "windbreaker": {
+      // Windbreaker: high funnel collar + diagonal team-tone chest stripe
+      addBox(root, 0.28, 0.13, 0.24, trimMat, 0, 1.40, 0)
+      addBox(root, torsoWidth + 0.01, 0.11, 0.31, crewMat, 0, 1.13, 0)
+      break
+    }
+    case "apron": {
+      // Press Apron: front bib panel hanging down past waist + neck strap + tool pocket
+      addBox(root, 0.36, 0.56, 0.04, trimMat, 0, 1.04, -0.165)
+      addBox(root, 0.22, 0.08, 0.26, trimMat, 0, 1.39, 0.02)
+      addBox(root, 0.26, 0.15, 0.03, topMat, 0, 0.94, -0.185)
+      addBox(root, torsoWidth + 0.02, 0.04, 0.32, trimMat, 0, 0.96, 0)
+      break
+    }
+    case "vest": {
+      // Courier Vest: sleeveless open vest cut with V-neck collar & utility pockets
+      addBox(root, 0.04, 0.58, 0.02, trimMat, 0, 1.10, -0.16)
+      addBox(root, 0.32, 0.08, 0.25, trimMat, 0, 1.38, 0.02)
+      addBox(root, 0.13, 0.12, 0.03, trimMat, -0.14, 1.00, -0.16)
+      addBox(root, 0.13, 0.12, 0.03, trimMat, 0.14, 1.00, -0.16)
+      break
+    }
+    case "trench": {
+      // Foreman Trench Coat: longer torso skirt extending past knees & wide collar
+      addBox(root, torsoWidth + 0.04, 0.34, 0.34, topMat, 0, 0.61, 0, true)
+      addBox(root, torsoWidth + 0.05, 0.06, 0.35, trimMat, 0, 0.46, 0)
+      addBox(root, torsoWidth + 0.10, 0.12, 0.36, trimMat, 0, 1.39, 0.02)
+      addBox(root, 0.20, 0.14, 0.06, trimMat, -0.14, 1.33, -0.17)
+      addBox(root, 0.20, 0.14, 0.06, trimMat, 0.14, 1.33, -0.17)
+      addBox(root, torsoWidth + 0.04, 0.07, 0.33, trimMat, 0, 0.82, 0)
+      break
+    }
+    case "tracksuit": {
+      // Runner Tracksuit: stand-up athletic collar, zip front, torso side stripes
+      addBox(root, 0.28, 0.11, 0.24, trimMat, 0, 1.40, 0)
+      addBox(root, 0.03, 0.60, 0.02, trimMat, 0, 1.09, -0.155)
+      addBox(root, 0.03, 0.62, 0.08, trimMat, -torsoWidth * 0.5 - 0.005, 1.09, 0)
+      addBox(root, 0.03, 0.62, 0.08, trimMat, torsoWidth * 0.5 + 0.005, 1.09, 0)
+      break
+    }
   }
 
   // Armor Vest silhouette (Light = slim strap; Heavy = unmistakable thick press-plate vest!)
@@ -232,31 +291,95 @@ export function createAvatarRig(
   // Ink visor / eyes
   addBox(headGroup, 0.22, 0.05, 0.03, trimMat, 0, 0.19, -0.155)
 
-  if (cosmetics.hat === "cap") {
-    addBox(headGroup, 0.33, 0.12, 0.33, crewMat, 0, 0.32, 0)
-    // Forward bill brim
-    addBox(headGroup, 0.31, 0.035, 0.22, trimMat, 0, 0.27, -0.22)
-  } else {
-    // Knit beanie dome + ribbed fold cuff
-    addBox(headGroup, 0.34, 0.10, 0.34, crewMat, 0, 0.30, 0)
-    const dome = new THREE.Mesh(new THREE.SphereGeometry(0.165, 10, 8), crewMat)
-    dome.position.set(0, 0.35, 0)
-    addInkEdges(dome, 26)
-    headGroup.add(dome)
+  switch (cosmetics.hat) {
+    case "cap": {
+      addBox(headGroup, 0.33, 0.12, 0.33, crewMat, 0, 0.32, 0)
+      // Forward bill brim
+      addBox(headGroup, 0.31, 0.035, 0.22, trimMat, 0, 0.27, -0.22)
+      break
+    }
+    case "beanie": {
+      // Knit beanie dome + ribbed fold cuff
+      addBox(headGroup, 0.34, 0.10, 0.34, crewMat, 0, 0.30, 0)
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.165, 10, 8), crewMat)
+      dome.position.set(0, 0.35, 0)
+      addInkEdges(dome, 26)
+      headGroup.add(dome)
+      break
+    }
+    case "bucket": {
+      // Bucket Hat: wide brim cylinder + crown
+      const crown = new THREE.Mesh(new THREE.CylinderGeometry(0.165, 0.175, 0.13, 10), crewMat)
+      crown.position.set(0, 0.35, 0)
+      crown.castShadow = true
+      addInkEdges(crown, 24)
+      headGroup.add(crown)
+
+      const band = new THREE.Mesh(new THREE.CylinderGeometry(0.178, 0.178, 0.03, 10), trimMat)
+      band.position.set(0, 0.30, 0)
+      headGroup.add(band)
+
+      const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.27, 0.05, 12), crewMat)
+      brim.position.set(0, 0.27, 0)
+      brim.castShadow = true
+      addInkEdges(brim, 24)
+      headGroup.add(brim)
+      break
+    }
+    case "headband": {
+      // Pressman Headband: thin band around the head
+      addBox(headGroup, 0.32, 0.05, 0.32, crewMat, 0, 0.25, 0)
+      addBox(headGroup, 0.06, 0.06, 0.03, trimMat, 0, 0.25, -0.162)
+      break
+    }
+    case "hardHat": {
+      // Plant Hard Hat: dome + front brim ridge
+      const dome = new THREE.Mesh(new THREE.SphereGeometry(0.175, 10, 8), crewMat)
+      dome.position.set(0, 0.33, 0)
+      dome.castShadow = true
+      addInkEdges(dome, 24)
+      headGroup.add(dome)
+
+      addBox(headGroup, 0.34, 0.035, 0.34, trimMat, 0, 0.28, 0)
+      addBox(headGroup, 0.32, 0.035, 0.14, crewMat, 0, 0.28, -0.19)
+      addBox(headGroup, 0.06, 0.05, 0.30, trimMat, 0, 0.38, 0)
+      break
+    }
+    case "bareHead": {
+      // Bare Head: draws no hat
+      break
+    }
   }
   root.add(headGroup)
 
   // Left & Right Arms (articulated at shoulder y = 1.32)
+  // Vest top has sleeveless (thin arms) geometry with skin tone arms
+  const armWidth = isVest ? 0.12 : 0.16
+  const armDepth = isVest ? 0.12 : 0.16
+  const armMat = isVest ? skinMat : topMat
+
   const leftArm = new THREE.Group()
-  leftArm.position.set(-(torsoWidth * 0.5 + 0.10), 1.32, 0)
-  addBox(leftArm, 0.16, 0.54, 0.16, topMat, 0, -0.22, -0.08)
-  addBox(leftArm, 0.14, 0.13, 0.14, trimMat, 0, -0.49, -0.14)
+  leftArm.position.set(-(torsoWidth * 0.5 + (isVest ? 0.07 : 0.10)), 1.32, 0)
+  if (isVest) {
+    addBox(leftArm, 0.16, 0.08, 0.16, topMat, 0, 0.02, -0.08)
+  }
+  addBox(leftArm, armWidth, 0.54, armDepth, armMat, 0, -0.22, -0.08)
+  addBox(leftArm, isVest ? 0.13 : 0.14, 0.13, isVest ? 0.13 : 0.14, trimMat, 0, -0.49, -0.14)
+  if (isTracksuit) {
+    addBox(leftArm, 0.02, 0.52, 0.06, trimMat, -0.085, -0.22, -0.08)
+  }
   root.add(leftArm)
 
   const rightArm = new THREE.Group()
-  rightArm.position.set(torsoWidth * 0.5 + 0.10, 1.32, 0)
-  addBox(rightArm, 0.16, 0.52, 0.16, topMat, 0, -0.16, -0.14)
-  addBox(rightArm, 0.14, 0.13, 0.14, trimMat, 0, -0.24, -0.34)
+  rightArm.position.set(torsoWidth * 0.5 + (isVest ? 0.07 : 0.10), 1.32, 0)
+  if (isVest) {
+    addBox(rightArm, 0.16, 0.08, 0.16, topMat, 0, 0.02, -0.14)
+  }
+  addBox(rightArm, armWidth, 0.52, armDepth, armMat, 0, -0.16, -0.14)
+  addBox(rightArm, isVest ? 0.13 : 0.14, 0.13, isVest ? 0.13 : 0.14, trimMat, 0, -0.24, -0.34)
+  if (isTracksuit) {
+    addBox(rightArm, 0.02, 0.50, 0.06, trimMat, 0.085, -0.16, -0.14)
+  }
 
   const gunAnchor = new THREE.Group()
   gunAnchor.position.set(-0.04, -0.22, -0.42)
@@ -286,11 +409,13 @@ export function createViewmodelRig(
   gunPivot.position.set(0.28, -0.25, -0.48)
   root.add(gunPivot)
 
-  const swatch = SWATCHES[cosmetics.swatch]
+  const swatch = SWATCHES[cosmetics.swatch] ?? SWATCHES.ivory
   const crewDef = CREWS[crew]
-  const sleeveMat = createInkMaterial(swatch.hex, { hatchStrength: 0.25 })
+  const sleeveHex = swatch.hex
+  const trimHex = swatch.trimHex
+  const sleeveMat = createInkMaterial(sleeveHex, { hatchStrength: 0.25 })
   const cuffMat = createInkMaterial(
-    cosmetics.top === "windbreaker" ? crewDef.colorHex : swatch.trimHex,
+    cosmetics.top === "windbreaker" ? crewDef.colorHex : trimHex,
     { hatchStrength: 0.2 }
   )
   const gloveMat = createInkMaterial(0x28312d, { hatchStrength: 0.22 })
@@ -301,6 +426,14 @@ export function createViewmodelRig(
   rSleeve.rotation.set(0.22, -0.18, 0)
   addInkEdges(rSleeve, 24)
   gunPivot.add(rSleeve)
+
+  if (cosmetics.top === "tracksuit") {
+    const rStripe = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.114, 0.42), cuffMat)
+    rStripe.position.set(0.065, -0.065, 0.26)
+    rStripe.rotation.set(0.22, -0.18, 0)
+    addInkEdges(rStripe, 24)
+    gunPivot.add(rStripe)
+  }
 
   const rCuff = new THREE.Mesh(new THREE.BoxGeometry(0.118, 0.118, 0.06), cuffMat)
   rCuff.position.set(0.025, -0.075, 0.07)
@@ -320,6 +453,14 @@ export function createViewmodelRig(
     lSleeve.rotation.set(0.2, 0.56, 0)
     addInkEdges(lSleeve, 24)
     gunPivot.add(lSleeve)
+
+    if (cosmetics.top === "tracksuit") {
+      const lStripe = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.109, 0.44), cuffMat)
+      lStripe.position.set(-0.24, -0.085, 0.08)
+      lStripe.rotation.set(0.2, 0.56, 0)
+      addInkEdges(lStripe, 24)
+      gunPivot.add(lStripe)
+    }
 
     const lCuff = new THREE.Mesh(new THREE.BoxGeometry(0.112, 0.112, 0.055), cuffMat)
     lCuff.position.set(-0.13, -0.09, -0.10)
