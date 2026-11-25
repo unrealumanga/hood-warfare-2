@@ -37,6 +37,7 @@ export interface MakeMatchOptions {
   readonly anomalyEnabled?: boolean
   readonly totalSlots?: number
   readonly equipmentStaked?: boolean
+  readonly difficulty?: number
   readonly initialHumans?: ReadonlyArray<InitialHumanSpec> | null
   readonly debug?: Debug.Option
 }
@@ -52,7 +53,8 @@ export function makeMatchRuntime(options: MakeMatchOptions = {}) {
         mode: options.mode,
         anomalyEnabled: options.anomalyEnabled,
         totalSlots: options.totalSlots,
-        equipmentStaked: options.equipmentStaked
+        equipmentStaked: options.equipmentStaked,
+        difficulty: options.difficulty
       }),
       EventFeed: { items: [] },
       InputQueue: { bySlot: {} }

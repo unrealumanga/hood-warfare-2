@@ -196,6 +196,8 @@ export interface FighterData {
   // Combat vitals & state
   readonly alive: boolean
   readonly hp: number
+  readonly maxHp: number
+  readonly isBoss: boolean
   readonly armor: number
   readonly maxArmor: number
   readonly respawnTicksLeft: number
@@ -270,6 +272,14 @@ export interface InitialHumanSpec {
   readonly cosmetics: CosmeticLoadout
 }
 
+export interface HealthPickupData {
+  readonly x: number
+  readonly y: number
+  readonly z: number
+  readonly available: boolean
+  readonly respawnTicksLeft: number
+}
+
 export interface MatchStateData {
   readonly mode: GameModeId
   readonly totalSlots: number
@@ -297,6 +307,11 @@ export interface MatchStateData {
   readonly foreman: ForemanData | null
   readonly extraction: ExtractionData | null
   readonly foundry: FoundryData | null
+  readonly healthPickup: HealthPickupData
+  readonly difficulty: number
+  readonly bossSlot: number // -1 = no boss has entered yet
+  readonly bossDefeated: boolean
+  readonly pendingDifficulty: number | null
   readonly pendingBootSeed: number | null
   readonly pendingInitialHumans: ReadonlyArray<InitialHumanSpec> | null
   readonly pendingMode: GameModeId | null
@@ -325,6 +340,9 @@ export type MatchEventKind =
   | "anomalyShift"
   | "foundryDeposit"
   | "extractComplete"
+  | "pickup"
+  | "bossSpawn"
+  | "bossDown"
 
 export interface MatchEventItem {
   readonly seq: number
@@ -378,6 +396,7 @@ export type MatchIntent =
       readonly anomalyEnabled?: boolean
       readonly totalSlots?: number
       readonly equipmentStaked?: boolean
+      readonly difficulty?: number
       readonly initialHumans?: ReadonlyArray<InitialHumanSpec>
     }
 

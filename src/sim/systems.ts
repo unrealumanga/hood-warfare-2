@@ -5,6 +5,12 @@ import {
   ARMORS,
   ARM_LATERAL,
   BARREL_BLAST_DAMAGE,
+  DIFFICULTY_DEFAULT,
+  DIFFICULTY_MAX,
+  DIFFICULTY_MIN,
+  HEALTH_PICKUP_FIRST_SPAWN_TICKS,
+  HEALTH_PICKUP_POS,
+  botCosmetics,
   HEAD_BYPASSES_ARMOR,
   HEAD_MIN_Y,
   HIT_ZONE_MULT,
@@ -20,7 +26,6 @@ import {
   GRAPPLE_PULL_SPEED,
   GRAPPLE_RANGE,
   GUNS,
-  HAT_IDS,
   MATCH_DURATION_TICKS,
   MURAL_ROTATE_TICKS,
   PARRY_COOLDOWN_TICKS,
@@ -40,9 +45,7 @@ import {
   SMOKE_CLEAR_TICKS,
   SMOKE_COOLDOWN_TICKS,
   SMOKE_LIFETIME_TICKS,
-  SWATCH_IDS,
   TICK_HZ,
-  TOP_IDS,
   sanitizeCosmetics,
   sanitizeLoadout,
   type CrewId,
@@ -239,6 +242,7 @@ export function makeDefaultMatchState(
     readonly anomalyEnabled?: boolean
     readonly totalSlots?: number
     readonly equipmentStaked?: boolean
+    readonly difficulty?: number
   } = {}
 ): MatchStateData {
   const mode = options.mode ?? "mural"
@@ -272,6 +276,17 @@ export function makeDefaultMatchState(
     foreman: initialForeman(mode),
     extraction: initialExtraction(mode, equipmentStaked),
     foundry: initialFoundry(mode),
+    healthPickup: {
+      x: HEALTH_PICKUP_POS.x,
+      y: HEALTH_PICKUP_POS.y,
+      z: HEALTH_PICKUP_POS.z,
+      available: false,
+      respawnTicksLeft: HEALTH_PICKUP_FIRST_SPAWN_TICKS
+    },
+    difficulty: clamp(Math.round(options.difficulty ?? DIFFICULTY_DEFAULT), DIFFICULTY_MIN, DIFFICULTY_MAX),
+    bossSlot: -1,
+    bossDefeated: false,
+    pendingDifficulty: null,
     pendingBootSeed: null,
     pendingInitialHumans: initialHumans,
     pendingMode: mode,
@@ -298,11 +313,7 @@ function makeFighterForSlot(
       }
   const cosmetics = isHuman
     ? sanitizeCosmetics(humanSpec.cosmetics)
-    : {
-        top: TOP_IDS[slotId % TOP_IDS.length]!,
-        hat: HAT_IDS[slotId % HAT_IDS.length]!,
-        swatch: SWATCH_IDS[(slotId + (crew === 0 ? 0 : 2)) % 6]!
-      }
+    : botCosmetics(slotId, crew)
   const maxArmor = ARMORS[loadout.armor].maxArmor
   const primaryDef = GUNS[loadout.primary]
   const sidearmDef = GUNS.proofPistol
@@ -328,6 +339,8 @@ function makeFighterForSlot(
     grounded: true,
     alive: true,
     hp: PLAYER_MAX_HP,
+    maxHp: PLAYER_MAX_HP,
+    isBoss: false,
     armor: maxArmor,
     maxArmor,
     respawnTicksLeft: 0,
@@ -591,7 +604,8 @@ export const BootstrapMatch = Game.System(
         mode,
         anomalyEnabled,
         totalSlots,
-        equipmentStaked: prev.pendingEquipmentStake
+        equipmentStaked: prev.pendingEquipmentStake,
+        difficulty: prev.pendingDifficulty ?? prev.difficulty
       }),
       nextEventSeq: prev.nextEventSeq
     })
@@ -758,7 +772,8 @@ export const HandleIntents = Game.System(
             pendingMode: intent.mode ?? match.mode,
             pendingAnomalyEnabled: intent.anomalyEnabled ?? match.anomalyEnabled,
             pendingTotalSlots: intent.totalSlots ?? match.totalSlots,
-            pendingEquipmentStake: intent.equipmentStaked ?? false
+            pendingEquipmentStake: intent.equipmentStaked ?? false,
+            pendingDifficulty: intent.difficulty ?? null
           }
           const cur = machines.phase.get()._tag
           if (cur === "Playing") {
@@ -1489,6 +1504,8 @@ export const StepCombatAndMatch = Game.System(
             grounded: true,
             alive: true,
             hp: PLAYER_MAX_HP,
+            maxHp: PLAYER_MAX_HP,
+            isBoss: false,
             armor: maxArmor,
             maxArmor,
             respawnTicksLeft: 0,

@@ -11,6 +11,7 @@ import {
   type FighterData,
   type ForemanData,
   type FoundryData,
+  type HealthPickupData,
   type MatchEventItem,
   type MatchWinner,
   type MovablePropData,
@@ -42,6 +43,10 @@ export interface MatchSnapshot {
   readonly foreman: ForemanData | null
   readonly extraction: ExtractionData | null
   readonly foundry: FoundryData | null
+  readonly healthPickup: HealthPickupData
+  readonly difficulty: number
+  readonly bossSlot: number
+  readonly bossDefeated: boolean
   readonly events: ReadonlyArray<MatchEventItem>
 }
 
@@ -97,6 +102,10 @@ export const ReadMatchSnapshot = Game.Inspector(
       foreman: match.foreman,
       extraction: match.extraction,
       foundry: match.foundry,
+      healthPickup: match.healthPickup,
+      difficulty: match.difficulty,
+      bossSlot: match.bossSlot,
+      bossDefeated: match.bossDefeated,
       events: feed.items
     }
   }

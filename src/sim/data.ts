@@ -337,6 +337,15 @@ export function sanitizeLoadout(raw: unknown): CombatLoadout {
   return { primary, armor }
 }
 
+/** Cosmetics for a bot. Variety and per-crew palettes are the clothing worker's job (see agents brief). */
+export function botCosmetics(slotId: number, crew: CrewId): CosmeticLoadout {
+  return {
+    top: TOP_IDS[slotId % TOP_IDS.length]!,
+    hat: HAT_IDS[slotId % HAT_IDS.length]!,
+    swatch: SWATCH_IDS[(slotId + (crew === 0 ? 0 : 2)) % 6]!
+  }
+}
+
 export const BOT_NAMES: ReadonlyArray<string> = [
   "Milo Press",
   "Sora Ink",
@@ -359,3 +368,28 @@ export const BOT_NAMES: ReadonlyArray<string> = [
   "Toby Galley",
   "Faye Etch"
 ]
+
+// ── Health booster, difficulty ramp and boss tunables ────────────────────
+// One booster in the middle of the Courtyard (the contested mural point): you have to fight for it.
+export const HEALTH_PICKUP_POS = { x: 0, y: 0, z: 0 } as const
+export const HEALTH_PICKUP_RADIUS = 1.1
+export const HEALTH_PICKUP_HEAL = 60
+export const HEALTH_PICKUP_ARMOR = 25
+export const HEALTH_PICKUP_FIRST_SPAWN_TICKS = 8 * TICK_HZ
+export const HEALTH_PICKUP_RESPAWN_TICKS = 25 * TICK_HZ
+
+// Difficulty level 0..10 drives the vermilion (red) bots. Starts from the player's campaign level and rises
+// during a match by one step per DIFFICULTY_KILLS_PER_STEP cobalt kills.
+export const DIFFICULTY_MIN = 0
+export const DIFFICULTY_MAX = 10
+export const DIFFICULTY_DEFAULT = 2
+export const DIFFICULTY_KILLS_PER_STEP = 4
+
+// The boss: one tougher red bot that enters mid-match.
+export const BOSS_SPAWN_TICK = 75 * TICK_HZ
+export const BOSS_HP = 350
+export const BOSS_ARMOR: ArmorId = "heavy"
+export const BOSS_GUN: PrimaryGunId = "broadside"
+export const BOSS_SCALE = 1.35
+export const BOSS_NAME = "Chief Compositor"
+export const BOSS_KILL_SCORE = 10
