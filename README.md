@@ -4,8 +4,8 @@ A 3D first-person arcade shooter set in **Bell Yard**, an Inkline Town–inspire
 
 ### [▶ Play now](https://unrealumanga.github.io/hood-warfare-2/)
 
-![Courtyard](docs/courtyard.png)
-![Deck](docs/deck.png)
+![Menu](docs/menu.png)
+![Gameplay](docs/gameplay.png)
 
 Play Offline works on GitHub Pages. Play Online needs the Node WebSocket server (`npm run dev:all`), so it only works locally.
 
