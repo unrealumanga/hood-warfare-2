@@ -1088,12 +1088,15 @@ class HoodWarfareApp {
     this.updateHud(snap0)
 
     const source = FixedLoop.source((onTick) => {
-      let last = performance.now()
+      // rAF timestamps are the frame start time and can be EARLIER than a performance.now() read
+      // taken mid-frame (e.g. when Play Again is clicked). A negative delta makes FixedLoop fail with
+      // InvalidTickDelta and stop for good (frozen game), so the first frame only seeds the clock.
+      let last = -1
       let stopped = false
       let rafId = 0
       const frame = (now: number) => {
         if (stopped) return
-        onTick({ deltaMS: now - last })
+        onTick({ deltaMS: last < 0 ? 0 : Math.max(0, now - last) })
         last = now
         rafId = requestAnimationFrame(frame)
       }
@@ -1128,8 +1131,9 @@ class HoodWarfareApp {
       render: () => {
         this.scene.renderFrame(this.currentSnapshot, 0, this.localYaw, this.localPitch)
       },
-      onFailure: () => {
-        // gracefully handled
+      onFailure: (failure) => {
+        console.error("[hood-warfare-2] offline loop stopped:", failure)
+        ;(window as unknown as { __hwFail?: unknown }).__hwFail = failure
       }
     })
     if (started.ok) {
