@@ -19,6 +19,7 @@ import {
   sanitizeMapId,
   type MapId,
   type SketchAnchorPair,
+  PLAYER_CROUCH_EYE_HEIGHT,
   PLAYER_EYE_HEIGHT,
   PRIMARY_GUN_IDS,
   SKETCH_ERASE_RANGE,
@@ -496,7 +497,7 @@ class HoodWarfareApp {
 
           <div class="ink-divider"></div>
           <div style="font-size:11px;color:var(--ink);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
-            <span>WASD Move · LMB Fire · R Reload · Space Jump · 1/2 Guns · Q Sketch · E Erase · F Parry · G Smoke · C/RMB Grapple</span>
+            <span>WASD Move · LMB Fire · R Reload · Space Jump · <span class="crouch-hint">V/LeftCtrl CROUCH (hold)</span> · 1/2 Guns · Q Sketch · E Erase · F Parry · G Smoke · C/RMB Grapple</span>
             <span>First to 100 pts or 5:00 · 45s Mural Rotation</span>
           </div>
         </div>
@@ -928,6 +929,7 @@ class HoodWarfareApp {
         (this.pressedKeys.has("KeyA") || this.pressedKeys.has("ArrowLeft") ? 1 : 0)
       : 0
     const jump = canControl && this.pressedKeys.has("Space")
+    const crouch = canControl && (this.pressedKeys.has("ControlLeft") || this.pressedKeys.has("KeyV"))
     const fire = canControl && this.mouseDown
     const reload = canControl && this.pendingReload
     const switchSlot = canControl ? this.pendingSwitchSlot : 0
@@ -956,6 +958,7 @@ class HoodWarfareApp {
       yaw: this.localYaw,
       pitch: this.localPitch,
       jump,
+      crouch,
       fire,
       reload,
       switchSlot,
@@ -985,7 +988,7 @@ class HoodWarfareApp {
     const aimX = -sinY * cosP
     const aimY = sinP
     const aimZ = -cosY * cosP
-    const eyeY = me.y + PLAYER_EYE_HEIGHT
+    const eyeY = me.y + (me.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT)
 
     if (this.sketchPreviewMode === "plank") {
       // Prefer aimed Sketch Anchor pair if within range & view cone
@@ -1675,7 +1678,7 @@ class HoodWarfareApp {
       `${gun.name}${me.activeSlot === 1 ? " [1]" : " [2]"}`
     this.q("#hud-ammo-val").textContent =
       me.reloadTicksLeft > 0 ? "RELOADING..." : `${ammo} / ${gun.magSize}`
-    this.q("#hud-reload-hint").textContent = `[1] ${GUNS[me.primaryGun].name} · [2] Proof Pistol · [R] Reload`
+    this.q("#hud-reload-hint").textContent = `[1] ${GUNS[me.primaryGun].name} · [2] Proof Pistol · [R] Reload · [V/LeftCtrl] CROUCH${me.crouching ? " •" : ""}`
 
     // Update Sketch preview ghost & Ability / Reticle chips
     this.updateSketchPreviewVisual()
@@ -1729,7 +1732,7 @@ class HoodWarfareApp {
         const aimX = -sinY * cosP
         const aimY = Math.sin(this.localPitch)
         const aimZ = -cosY * cosP
-        const eyeY = me.y + PLAYER_EYE_HEIGHT
+        const eyeY = me.y + (me.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT)
         for (const l of mapForId(snap.mapId).grappleLedges) {
           const dx = l.x - me.x
           const dy = l.y - eyeY

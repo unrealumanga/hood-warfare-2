@@ -58,7 +58,7 @@ function sanitizeName(raw: unknown): string {
   return cleaned.length > 0 ? cleaned : "Printer"
 }
 
-function sanitizeInput(raw: unknown): PlayerInput | null {
+export function sanitizeInput(raw: unknown): PlayerInput | null {
   if (typeof raw !== "object" || raw === null) return null
   const r = raw as Record<string, unknown>
   const num = (k: string, fallback = 0): number => {
@@ -92,6 +92,7 @@ function sanitizeInput(raw: unknown): PlayerInput | null {
     moveRight: Math.max(-1, Math.min(1, num("moveRight", 0))),
     yaw: num("yaw", 0),
     pitch: Math.max(-1.45, Math.min(1.45, num("pitch", 0))),
+    crouch: Boolean(r["crouch"]),
     jump: Boolean(r["jump"]),
     fire: Boolean(r["fire"]),
     reload: Boolean(r["reload"]),

@@ -50,6 +50,8 @@ import {
   MURAL_ROTATE_TICKS,
   PARRY_COOLDOWN_TICKS,
   PARRY_WINDOW_TICKS,
+  PLAYER_CROUCH_HEIGHT,
+  PLAYER_CROUCH_EYE_HEIGHT,
   PLAYER_EYE_HEIGHT,
   PLAYER_HEIGHT,
   PLAYER_MAX_HP,
@@ -82,6 +84,7 @@ import {
 import { MAPS, sanitizeMapId, type MapDef, type MapId } from "./maps.ts"
 import {
   hasLineOfSight,
+  resolveCrouching,
   stepPlayerMovement,
   sweepSegmentVsCapsule,
   sweepSegmentVsWorld
@@ -355,6 +358,7 @@ function makeFighterForSlot(
     yaw: spawn.yaw,
     pitch: 0,
     grounded: true,
+    crouching: false,
     alive: true,
     hp: PLAYER_MAX_HP,
     maxHp: PLAYER_MAX_HP,
@@ -678,6 +682,7 @@ export const HandleIntents = Game.System(
               moveRight: clamp(intent.input.moveRight, -1, 1),
               yaw: intent.input.yaw,
               pitch: clamp(intent.input.pitch, -MAX_PITCH, MAX_PITCH),
+              crouch: Boolean(intent.input.crouch),
               jump: intent.input.jump,
               fire: intent.input.fire,
               reload: intent.input.reload,
@@ -890,7 +895,7 @@ export const RunBotAI = Game.System(
         const other = otherEntry.data
         if (!other.alive || other.crew === bot.crew) continue
         const dx = other.x - bot.x
-        const dy = other.y + 1.1 - eyeY
+        const dy = other.y + (other.crouching && !other.isBoss ? 0.65 * PLAYER_CROUCH_HEIGHT : 1.1) - eyeY
         const dz = other.z - bot.z
         const dist = Ops.hypot(Ops.hypot(dx, dz), dy)
         if (dist < bestTargetDist) {
@@ -900,7 +905,7 @@ export const RunBotAI = Game.System(
               eyeY,
               bot.z,
               other.x,
-              other.y + 1.15,
+              other.y + (other.crouching && !other.isBoss ? 0.65 * PLAYER_CROUCH_HEIGHT : 1.15),
               other.z,
               dynamicSolids,
               match.smokeClouds,
@@ -997,7 +1002,7 @@ export const RunBotAI = Game.System(
 
       if (target !== null) {
         const dx = target.x - bot.x
-        const dy = target.y + 1.15 - eyeY
+        const dy = target.y + (target.crouching && !target.isBoss ? 0.65 * PLAYER_CROUCH_HEIGHT : 1.15) - eyeY
         const dz = target.z - bot.z
         const horiz = Math.max(0.01, Ops.hypot(dx, dz))
         // Skill: red bots follow the match difficulty (the boss plays above it), allies stay at a fixed level
@@ -1215,6 +1220,11 @@ export const StepCombatAndMatch = Game.System(
       if (!f.alive) continue
       const input = inputsBySlot[f.slotId] ?? EMPTY_INPUT
 
+      f = { ...f, crouching: !f.isBoss && resolveCrouching(f, input.crouch === true, {
+        map, extraSolids: buildDynamicSolids(constructs, cableCar, map)
+      }) }
+      entry.data = f
+
       // A. Sketch Placement (Anchor / Free / Waist-High Barricade)
       if (
         input.sketchAction &&
@@ -1390,7 +1400,7 @@ export const StepCombatAndMatch = Game.System(
         const targetZ = clamp(f.z - cosY * 5.0, map.smokeBounds.minZ, map.smokeBounds.maxZ)
         const wall = sweepSegmentVsWorld(
           f.x,
-          f.y + PLAYER_EYE_HEIGHT,
+          f.y + (f.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT),
           f.z,
           targetX,
           f.y + 1.4,
@@ -1446,7 +1456,8 @@ export const StepCombatAndMatch = Game.System(
       } else if (
         input.grappleActionId &&
         input.grappleActionId > f.lastHandledGrappleId &&
-        f.grappleCooldownTicks === 0
+        f.grappleCooldownTicks === 0 &&
+        !f.crouching
       ) {
         f = { ...f, lastHandledGrappleId: input.grappleActionId }
         const sinY = Ops.sin(input.yaw)
@@ -1456,7 +1467,7 @@ export const StepCombatAndMatch = Game.System(
         const aimX = -sinY * cosP
         const aimY = sinP
         const aimZ = -cosY * cosP
-        const eyeY = f.y + PLAYER_EYE_HEIGHT
+        const eyeY = f.y + (f.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT)
 
         let bestDot = 0.86
         let chosen: FighterData["grapple"] = null
@@ -1506,18 +1517,18 @@ export const StepCombatAndMatch = Game.System(
           const o = other.data
           if (!o.alive || o.crew === f.crew || o.armorType !== "light") continue
           const dx = o.x - f.x
-          const dy = o.y + 1.0 - eyeY
+          const dy = o.y + (o.crouching && !o.isBoss ? 0.65 * PLAYER_CROUCH_HEIGHT : 1.0) - eyeY
           const dz = o.z - f.z
           const dist = Ops.hypot(Ops.hypot(dx, dz), dy)
           if (dist < 2.2 || dist > GRAPPLE_RANGE) continue
           const dot = (dx * aimX + dy * aimY + dz * aimZ) / dist
-          if (dot > bestDot && hasLineOfSight(f.x, eyeY, f.z, o.x, o.y + 1.0, o.z, [], [], map)) {
+          if (dot > bestDot && hasLineOfSight(f.x, eyeY, f.z, o.x, o.y + (o.crouching && !o.isBoss ? 0.65 * PLAYER_CROUCH_HEIGHT : 1.0), o.z, [], [], map)) {
             bestDot = dot
             chosen = {
               kind: "bot",
               targetId: o.slotId,
               tx: o.x,
-              ty: o.y + 1.0,
+              ty: o.y + (o.crouching && !o.isBoss ? 0.65 * PLAYER_CROUCH_HEIGHT : 1.0),
               tz: o.z,
               ticksLeft: 20
             }
@@ -1643,6 +1654,7 @@ export const StepCombatAndMatch = Game.System(
             yaw: spawn.yaw,
             pitch: 0,
             grounded: true,
+            crouching: false,
             alive: true,
             hp: PLAYER_MAX_HP,
             maxHp: PLAYER_MAX_HP,
@@ -1726,9 +1738,10 @@ export const StepCombatAndMatch = Game.System(
         vy: number
         vz: number
         grounded: boolean
+        crouching?: boolean
       }
 
-      if (grapple && input.jump) {
+      if (grapple && input.jump && !f.crouching) {
         // Jump releases grapple cleanly mid-flight!
         grapple = null
       }
@@ -1830,7 +1843,8 @@ export const StepCombatAndMatch = Game.System(
             vx: f.vx,
             vy: f.vy,
             vz: f.vz,
-            grounded: f.grounded
+            grounded: f.grounded,
+            crouching: f.crouching
           },
           {
             moveForward: input.moveForward,
@@ -1840,9 +1854,11 @@ export const StepCombatAndMatch = Game.System(
           },
           speedMult,
           DT,
-          { map, extraSolids: dynamicSolids, anomalyActive }
+          { map, extraSolids: dynamicSolids, anomalyActive, crouch: !f.isBoss && input.crouch === true }
         )
       }
+
+      if (kin.crouching !== undefined) f = { ...f, crouching: kin.crouching }
 
       const gunId: GunId = activeSlot === 1 ? f.primaryGun : "proofPistol"
       const gun = GUNS[gunId]
@@ -1871,7 +1887,7 @@ export const StepCombatAndMatch = Game.System(
           targetSlot: null,
           gunId,
           x: kin.x,
-          y: kin.y + PLAYER_EYE_HEIGHT,
+          y: kin.y + (f.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT),
           z: kin.z,
           damage: 0
         })
@@ -1900,7 +1916,7 @@ export const StepCombatAndMatch = Game.System(
         const rightZ = -sinY
 
         const muzzleX = kin.x + fwdX * 0.45 + rightX * 0.12
-        const muzzleY = kin.y + PLAYER_EYE_HEIGHT - 0.08 + fwdY * 0.45
+        const muzzleY = kin.y + (f.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT) - 0.08 + fwdY * 0.45
         const muzzleZ = kin.z + fwdZ * 0.45 + rightZ * 0.12
 
         for (let p = 0; p < gun.pellets; p++) {
@@ -2124,7 +2140,7 @@ export const StepCombatAndMatch = Game.System(
           target.z,
           // The boss is drawn BOSS_SCALE times bigger: its hit capsule must match what the player sees
           PLAYER_RADIUS * (target.isBoss ? BOSS_SCALE : 1) + proj.radius,
-          PLAYER_HEIGHT * (target.isBoss ? BOSS_SCALE : 1)
+          (target.crouching && !target.isBoss ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT) * (target.isBoss ? BOSS_SCALE : 1)
         )
         if (t !== null && t < bestT) {
           bestT = t
@@ -2186,7 +2202,8 @@ export const StepCombatAndMatch = Game.System(
         const victim = fighterEntries[hitIdx]!.data
         const bodyScale = victim.isBoss ? BOSS_SCALE : 1
         const relY = (hitY - victim.y) / bodyScale
-        let zone: HitZone = relY >= HEAD_MIN_Y ? "head" : relY < LEG_MAX_Y ? "limb" : "torso"
+        const heightRatio = victim.crouching && !victim.isBoss ? PLAYER_CROUCH_HEIGHT / PLAYER_HEIGHT : 1
+        let zone: HitZone = relY >= HEAD_MIN_Y * heightRatio ? "head" : relY < LEG_MAX_Y * heightRatio ? "limb" : "torso"
         if (zone === "torso") {
           // Distance of the bullet's line from the body axis: silhouette edges are arms.
           const ddx = nx - proj.x

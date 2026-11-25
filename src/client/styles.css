@@ -630,6 +630,10 @@ body,
   color: var(--ink);
 }
 
+.crouch-hint {
+  white-space: nowrap;
+}
+
 /* Top Right: Killfeed & Online Meta */
 .hud-right-top {
   position: absolute;

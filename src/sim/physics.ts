@@ -1,6 +1,8 @@
 import { Ops } from "@typeonce/ritmo"
 import {
+  CROUCH_SPEED_MULT,
   PLAYER_BASE_SPEED,
+  PLAYER_CROUCH_HEIGHT,
   PLAYER_GRAVITY,
   PLAYER_HEIGHT,
   PLAYER_JUMP_SPEED,
@@ -19,6 +21,7 @@ export interface KinematicState {
   readonly vy: number
   readonly vz: number
   readonly grounded: boolean
+  readonly crouching?: boolean
 }
 
 export interface MoveInput {
@@ -41,6 +44,7 @@ export interface SmokeGridLike {
 }
 
 export interface MovementOptions {
+  readonly crouch?: boolean
   readonly map?: MapDef
   readonly extraSolids?: ReadonlyArray<MapBox>
   readonly gravityScale?: number
@@ -77,6 +81,18 @@ function isAreaFree(
   return true
 }
 
+/** Resolve a requested stance before movement or abilities; releasing crouch requires headroom. */
+export function resolveCrouching(
+  prev: Pick<KinematicState, "x" | "y" | "z" | "crouching">,
+  wantsCrouch: boolean,
+  opts: MovementOptions = {}
+): boolean {
+  return wantsCrouch || (prev.crouching === true && !isAreaFree(
+    prev.x, prev.y, prev.z, PLAYER_RADIUS, PLAYER_HEIGHT,
+    opts.extraSolids ?? [], opts.map ?? MAPS.bellYard
+  ))
+}
+
 export function isPointInAnomalyCourtyard(x: number, y: number, z: number, map = MAPS.bellYard): boolean {
   return (
     x >= map.anomalyCourtyard.minX &&
@@ -101,6 +117,8 @@ export function stepPlayerMovement(
 ): KinematicState {
   const map = opts.map ?? MAPS.bellYard
   const extraSolids = opts.extraSolids ?? []
+  const crouching = resolveCrouching(prev, opts.crouch === true, opts)
+  const height = crouching ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT
   const fwd = Math.max(-1, Math.min(1, input.moveForward))
   const right = Math.max(-1, Math.min(1, input.moveRight))
   const mag = Ops.hypot(fwd, right)
@@ -112,12 +130,12 @@ export function stepPlayerMovement(
   const dirX = -sinY * nf + cosY * nr
   const dirZ = -cosY * nf - sinY * nr
 
-  const speed = PLAYER_BASE_SPEED * speedMult
+  const speed = PLAYER_BASE_SPEED * speedMult * (crouching ? CROUCH_SPEED_MULT : 1)
   const vx = dirX * speed
   const vz = dirZ * speed
 
   let vy = prev.vy
-  if (prev.grounded && input.jump) {
+  if (prev.grounded && input.jump && !crouching) {
     vy = PLAYER_JUMP_SPEED
   }
   const inAnomaly = opts.anomalyActive === true && isPointInAnomalyCourtyard(prev.x, prev.y, prev.z, map)
@@ -130,12 +148,12 @@ export function stepPlayerMovement(
 
   // 1. Horizontal move X with stair auto step-up
   const tryX = x + vx * dt
-  if (isAreaFree(tryX, y, z, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids, map)) {
+  if (isAreaFree(tryX, y, z, PLAYER_RADIUS, height, extraSolids, map)) {
     x = tryX
   } else {
     let stepped = false
     for (let stepY = 0.16; stepY <= PLAYER_STEP_HEIGHT + 0.01; stepY += 0.16) {
-      if (isAreaFree(tryX, y + stepY, z, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids, map)) {
+      if (isAreaFree(tryX, y + stepY, z, PLAYER_RADIUS, height, extraSolids, map)) {
         x = tryX
         y += stepY
         stepped = true
@@ -145,7 +163,7 @@ export function stepPlayerMovement(
     if (!stepped) {
       for (const list of [map.solids, extraSolids] as const) {
         for (const box of list) {
-          if (overlapsCylinderXZ(tryX, z, PLAYER_RADIUS, box) && overlapsVertical(y, PLAYER_HEIGHT, box)) {
+          if (overlapsCylinderXZ(tryX, z, PLAYER_RADIUS, box) && overlapsVertical(y, height, box)) {
             if (vx > 0) x = Math.min(x, box.minX - PLAYER_RADIUS - 0.001)
             else if (vx < 0) x = Math.max(x, box.maxX + PLAYER_RADIUS + 0.001)
           }
@@ -156,12 +174,12 @@ export function stepPlayerMovement(
 
   // 2. Horizontal move Z with stair auto step-up
   const tryZ = z + vz * dt
-  if (isAreaFree(x, y, tryZ, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids, map)) {
+  if (isAreaFree(x, y, tryZ, PLAYER_RADIUS, height, extraSolids, map)) {
     z = tryZ
   } else {
     let stepped = false
     for (let stepY = 0.16; stepY <= PLAYER_STEP_HEIGHT + 0.01; stepY += 0.16) {
-      if (isAreaFree(x, y + stepY, tryZ, PLAYER_RADIUS, PLAYER_HEIGHT, extraSolids, map)) {
+      if (isAreaFree(x, y + stepY, tryZ, PLAYER_RADIUS, height, extraSolids, map)) {
         z = tryZ
         y += stepY
         stepped = true
@@ -171,7 +189,7 @@ export function stepPlayerMovement(
     if (!stepped) {
       for (const list of [map.solids, extraSolids] as const) {
         for (const box of list) {
-          if (overlapsCylinderXZ(x, tryZ, PLAYER_RADIUS, box) && overlapsVertical(y, PLAYER_HEIGHT, box)) {
+          if (overlapsCylinderXZ(x, tryZ, PLAYER_RADIUS, box) && overlapsVertical(y, height, box)) {
             if (vz > 0) z = Math.min(z, box.minZ - PLAYER_RADIUS - 0.001)
             else if (vz < 0) z = Math.max(z, box.maxZ + PLAYER_RADIUS + 0.001)
           }
@@ -205,13 +223,13 @@ export function stepPlayerMovement(
     for (const list of [map.solids, extraSolids] as const) {
       for (const box of list) {
         if (!overlapsCylinderXZ(x, z, PLAYER_RADIUS, box)) continue
-        if (box.minY >= y + PLAYER_HEIGHT - 0.08 && box.minY <= nextY + PLAYER_HEIGHT) {
+        if (box.minY >= y + height - 0.08 && box.minY <= nextY + height) {
           if (box.minY < hitCeiling) hitCeiling = box.minY
         }
       }
     }
     if (hitCeiling < 999) {
-      y = hitCeiling - PLAYER_HEIGHT - 0.002
+      y = hitCeiling - height - 0.002
       vy = 0
     } else {
       y = nextY
@@ -226,7 +244,7 @@ export function stepPlayerMovement(
     grounded = true
   }
 
-  return { x, y, z, vx, vy, vz, grounded }
+  return { x, y, z, vx, vy, vz, grounded, crouching }
 }
 
 // ── Swept Segment Collision (Slab Ray-AABB + Ray-Capsule + Ink Smoke Grid) ─

@@ -1,5 +1,8 @@
 import * as THREE from "three"
 import {
+  BOSS_SCALE,
+  PLAYER_CROUCH_HEIGHT,
+  PLAYER_HEIGHT,
   CREWS,
   SWATCHES,
   type ArmorId,
@@ -116,6 +119,12 @@ export interface AvatarRig {
   readonly rightLeg: THREE.Group
   readonly gunAnchor: THREE.Group
   readonly key: string
+}
+
+/** Scale about the planted feet, lowering the torso and head into cover. */
+export function applyAvatarStance(rig: AvatarRig, crouching: boolean, isBoss: boolean): void {
+  if (isBoss) rig.root.scale.setScalar(BOSS_SCALE)
+  else rig.root.scale.set(1, crouching ? PLAYER_CROUCH_HEIGHT / PLAYER_HEIGHT : 1, 1)
 }
 
 /**

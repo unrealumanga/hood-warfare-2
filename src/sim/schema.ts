@@ -28,6 +28,7 @@ export interface PlayerInput {
   readonly moveRight: number // -1..1
   readonly yaw: number
   readonly pitch: number
+  readonly crouch?: boolean
   readonly jump: boolean
   readonly fire: boolean
   readonly reload: boolean
@@ -47,6 +48,7 @@ export const EMPTY_INPUT: PlayerInput = {
   moveRight: 0,
   yaw: 0,
   pitch: 0,
+  crouch: false,
   jump: false,
   fire: false,
   reload: false,
@@ -193,6 +195,7 @@ export interface FighterData {
   readonly yaw: number
   readonly pitch: number
   readonly grounded: boolean
+  readonly crouching: boolean
 
   // Combat vitals & state
   readonly alive: boolean

@@ -4,9 +4,9 @@ import { addYardDetails } from "./yardDetails.ts"
 import * as THREE from "three"
 import {
   ARMORS,
-  BOSS_SCALE,
   CREWS,
   GUNS,
+  PLAYER_CROUCH_EYE_HEIGHT,
   PLAYER_EYE_HEIGHT,
   TICK_HZ,
   buildDynamicSolids,
@@ -19,6 +19,7 @@ import {
   type PlayerInput
 } from "../sim/index.ts"
 import {
+  applyAvatarStance,
   createAvatarRig,
   createViewmodelRig,
   type AvatarRig,
@@ -114,6 +115,7 @@ export class BellYardScene {
 
   // Local client prediction & server reconciliation state
   private predictedKin: KinematicState | null = null
+  private cameraEyeHeight = PLAYER_EYE_HEIGHT
   private pendingInputs: Array<PlayerInput> = []
   private lastAckedSeq = 0
   private smoothOffsetX = 0
@@ -687,6 +689,7 @@ export class BellYardScene {
     this.predictedKin = null
     this.pendingInputs = []
     this.lastAckedSeq = 0
+    this.cameraEyeHeight = PLAYER_EYE_HEIGHT
     this.smoothOffsetX = 0
     this.smoothOffsetY = 0
     this.smoothOffsetZ = 0
@@ -801,6 +804,7 @@ export class BellYardScene {
         vx: localFighter.vx,
         vy: localFighter.vy,
         vz: localFighter.vz,
+        crouching: localFighter.crouching,
         grounded: localFighter.grounded
       }
     }
@@ -817,7 +821,7 @@ export class BellYardScene {
       },
       speedMult,
       1 / TICK_HZ,
-      { map: snapshot ? mapForId(snapshot.mapId) : this.mapDef, extraSolids, anomalyActive: snapshot?.anomalyActive ?? false }
+      { map: snapshot ? mapForId(snapshot.mapId) : this.mapDef, extraSolids, anomalyActive: snapshot?.anomalyActive ?? false, crouch: !localFighter.isBoss && input.crouch === true }
     )
     this.pendingInputs.push(input)
     if (this.pendingInputs.length > 90) {
@@ -851,6 +855,7 @@ export class BellYardScene {
       vx: local.vx,
       vy: local.vy,
       vz: local.vz,
+      crouching: local.crouching,
       grounded: local.grounded
     }
     const speedMult = ARMORS[local.armorType].speedMultiplier
@@ -866,7 +871,7 @@ export class BellYardScene {
         },
         speedMult,
         1 / TICK_HZ,
-        { map: mapForId(snapshot.mapId), extraSolids, anomalyActive: snapshot.anomalyActive }
+        { map: mapForId(snapshot.mapId), extraSolids, anomalyActive: snapshot.anomalyActive, crouch: !local.isBoss && inp.crouch === true }
       )
     }
 
@@ -1248,9 +1253,11 @@ export class BellYardScene {
 
         if (f.alive) {
           const base = this.predictedKin ?? f
+          const eyeHeight = base.crouching && !f.isBoss ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT
+          this.cameraEyeHeight += (eyeHeight - this.cameraEyeHeight) * (1 - Math.exp(-18 * dt))
           this.camera.position.set(
             base.x + this.smoothOffsetX,
-            base.y + this.smoothOffsetY + PLAYER_EYE_HEIGHT,
+            base.y + this.smoothOffsetY + this.cameraEyeHeight,
             base.z + this.smoothOffsetZ
           )
           this.camera.rotation.y = localYaw
@@ -1356,8 +1363,8 @@ export class BellYardScene {
       rv.rig.headGroup.rotation.x = f.pitch * 0.7
       rv.rig.rightArm.rotation.x = f.pitch * 0.7
 
+      applyAvatarStance(rv.rig, f.crouching, f.isBoss)
       if (f.isBoss) {
-        rv.rig.root.scale.setScalar(BOSS_SCALE)
         if (!rv.menaceMarker) {
           const ringGeo = new THREE.RingGeometry(0.72, 0.96, 32)
           const ringMat = new THREE.MeshBasicMaterial({
@@ -1376,7 +1383,6 @@ export class BellYardScene {
         rv.menaceMarker.visible = true
         rv.menaceMarker.rotation.z += dt * 2.0
       } else {
-        rv.rig.root.scale.setScalar(1.0)
         if (rv.menaceMarker) {
           rv.menaceMarker.visible = false
         }
