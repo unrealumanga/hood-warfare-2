@@ -12,6 +12,7 @@ import {
   BOSS_KILL_SCORE,
   BOSS_MODES,
   BOSS_NAME,
+  BOSS_SCALE,
   BOSS_SKILL_BONUS,
   BOSS_SPAWN_TICK,
   BOT_SEEK_HEALTH_HP,
@@ -2081,8 +2082,9 @@ export const StepCombatAndMatch = Game.System(
           target.x,
           target.y,
           target.z,
-          PLAYER_RADIUS + proj.radius,
-          PLAYER_HEIGHT
+          // The boss is drawn BOSS_SCALE times bigger: its hit capsule must match what the player sees
+          PLAYER_RADIUS * (target.isBoss ? BOSS_SCALE : 1) + proj.radius,
+          PLAYER_HEIGHT * (target.isBoss ? BOSS_SCALE : 1)
         )
         if (t !== null && t < bestT) {
           bestT = t
@@ -2142,7 +2144,8 @@ export const StepCombatAndMatch = Game.System(
         const hitY = proj.y + (ny - proj.y) * bestT
         const hitZ = proj.z + (nz - proj.z) * bestT
         const victim = fighterEntries[hitIdx]!.data
-        const relY = hitY - victim.y
+        const bodyScale = victim.isBoss ? BOSS_SCALE : 1
+        const relY = (hitY - victim.y) / bodyScale
         let zone: HitZone = relY >= HEAD_MIN_Y ? "head" : relY < LEG_MAX_Y ? "limb" : "torso"
         if (zone === "torso") {
           // Distance of the bullet's line from the body axis: silhouette edges are arms.
@@ -2151,7 +2154,7 @@ export const StepCombatAndMatch = Game.System(
           const dlen = Ops.hypot(ddx, ddz)
           if (dlen > 1e-6) {
             const lateral = Math.abs((victim.x - proj.x) * ddz - (victim.z - proj.z) * ddx) / dlen
-            if (lateral > ARM_LATERAL) zone = "limb"
+            if (lateral > ARM_LATERAL * bodyScale) zone = "limb"
           }
         }
 

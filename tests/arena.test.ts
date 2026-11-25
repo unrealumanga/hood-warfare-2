@@ -268,3 +268,29 @@ describe("Determinism with the new systems", () => {
     expect(run()).toBe(run())
   })
 })
+
+describe("Boss hit capsule", () => {
+  it("matches the boss's drawn size: a shot at 2.2 m hits the boss but would sail over a normal fighter", () => {
+    const place = (isBoss: boolean) => {
+      const rt = boot(21, [human(0, "linecaster")])
+      edit(rt, {
+        fighter: (f) => {
+          if (f.slotId === 0) return { ...f, x: 0, y: 0, z: 5, yaw: 0, pitch: 0 }
+          if (f.slotId === 3) return { ...f, x: 0, y: 0, z: -1, yaw: Math.PI, hp: 100, armor: 0, isBoss, maxHp: isBoss ? BOSS_HP : 100 }
+          return { ...f, x: -24, y: 0, z: 14 + f.slotId * 0.01 }
+        }
+      })
+      const aim = Math.atan2(2.2 - 1.56, 6) // above a normal 1.78 m fighter's head
+      rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: input({ seq: 1, yaw: 0, pitch: aim, fire: true }) })
+      tickN(rt, 1)
+      rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: input({ seq: 2, yaw: 0, pitch: aim, fire: false }) })
+      for (let i = 0; i < 25; i++) {
+        edit(rt, { fighter: (f) => (f.slotId === 3 && f.alive ? { ...f, x: 0, y: 0, z: -1 } : f) })
+        tickN(rt, 1)
+      }
+      return readSnapshot(rt).fighters.find((f) => f.slotId === 3)!
+    }
+    expect(place(false).hp).toBe(100) // missed: over the head
+    expect(place(true).hp).toBeLessThan(BOSS_HP) // boss: 2.2 m is inside its 2.4 m body
+  })
+})

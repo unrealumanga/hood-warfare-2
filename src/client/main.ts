@@ -1273,9 +1273,11 @@ class HoodWarfareApp {
       const me = snap.fighters.find((f) => f.slotId === this.localSlotId)
       const myCrew = me?.crew ?? 0
       const prevLevel = this.profile.campaignLevel
-      if (snap.winner === myCrew) {
+      // Campaign threat only moves for offline matches in modes where the red-team difficulty applies
+      const campaignMatch = this.mode === "offline" && (snap.mode === "mural" || snap.mode === "foundry")
+      if (campaignMatch && snap.winner === myCrew) {
         this.profile.campaignLevel = Math.min(DIFFICULTY_MAX, this.profile.campaignLevel + 1)
-      } else if (snap.winner !== null && snap.winner !== "draw") {
+      } else if (campaignMatch && snap.winner !== null && snap.winner !== "draw") {
         this.profile.campaignLevel = Math.max(DIFFICULTY_MIN, this.profile.campaignLevel - 1)
       }
       this.lastThreatProgression = { from: prevLevel, to: this.profile.campaignLevel }
