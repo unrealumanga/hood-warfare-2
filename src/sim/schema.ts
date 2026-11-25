@@ -337,6 +337,7 @@ export interface MatchEventItem {
   readonly y: number
   readonly z: number
   readonly damage: number
+  readonly zone?: "head" | "torso" | "limb"
 }
 
 export interface EventFeedData {

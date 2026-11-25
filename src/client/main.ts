@@ -122,6 +122,10 @@ function formatClock(ticks: number): string {
   return `${m}:${s < 10 ? "0" : ""}${s}`
 }
 
+function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!)
+}
+
 class HoodWarfareApp {
   private readonly root: HTMLElement
   private readonly viewportEl: HTMLElement
@@ -176,7 +180,16 @@ class HoodWarfareApp {
   private predictedFireCooldown = 0
   private predictedWasFireHeld = false
 
-  private readonly killfeed: Array<{ readonly text: string; readonly expiresAt: number }> = []
+  private readonly killfeed: Array<{
+    readonly killer: string
+    readonly victim: string
+    readonly killerCrew: string
+    readonly victimCrew: string
+    readonly gun: string
+    readonly zone: string | undefined
+    readonly mine: boolean
+    readonly expiresAt: number
+  }> = []
   private hitmarkerTimeout: ReturnType<typeof setTimeout> | null = null
 
   // DOM References
@@ -1274,29 +1287,35 @@ class HoodWarfareApp {
       case "hit":
         if (isLocalActor) {
           this.audio.playHit()
-          this.flashHitmarker()
+          this.flashHitmarker(ev.zone)
         }
         break
       case "armorBreak":
         if (isLocalActor || isLocalTarget) {
           this.audio.playArmorBreak()
-          if (isLocalActor) this.flashHitmarker()
+          if (isLocalActor) this.flashHitmarker(ev.zone)
         }
         break
       case "elim": {
         if (isLocalActor) {
           this.audio.playElim()
-          this.flashHitmarker()
+          this.flashHitmarker(ev.zone)
         }
         const actor = this.currentSnapshot?.fighters.find((f) => f.slotId === ev.actorSlot)
         const target = this.currentSnapshot?.fighters.find((f) => f.slotId === ev.targetSlot)
         if (actor && target) {
           const gunName = ev.gunId ? GUNS[ev.gunId].name : "Ink"
           this.killfeed.push({
-            text: `${actor.name} [${gunName}] ${target.name}`,
-            expiresAt: performance.now() + 5000
+            killer: actor.name,
+            victim: target.name,
+            killerCrew: actor.crew === 0 ? "cobalt" : "vermilion",
+            victimCrew: target.crew === 0 ? "cobalt" : "vermilion",
+            gun: gunName,
+            zone: ev.zone,
+            mine: isLocalActor || isLocalTarget,
+            expiresAt: performance.now() + 6000
           })
-          if (this.killfeed.length > 4) this.killfeed.shift()
+          if (this.killfeed.length > 6) this.killfeed.shift()
         }
         break
       }
@@ -1335,8 +1354,10 @@ class HoodWarfareApp {
     }
   }
 
-  private flashHitmarker(): void {
+  private flashHitmarker(zone?: string): void {
     const hm = this.q("#hitmarker")
+    hm.classList.remove("head", "limb")
+    if (zone === "head" || zone === "limb") hm.classList.add(zone)
     hm.classList.add("show")
     if (this.hitmarkerTimeout !== null) clearTimeout(this.hitmarkerTimeout)
     this.hitmarkerTimeout = setTimeout(() => hm.classList.remove("show"), 120)
@@ -1396,7 +1417,16 @@ class HoodWarfareApp {
     const now = performance.now()
     const activeFeed = this.killfeed.filter((k) => k.expiresAt > now)
     this.q("#hud-killfeed").innerHTML = activeFeed
-      .map((k) => `<div class="killfeed-item">${k.text}</div>`)
+      .map((k) => {
+        const fade = k.expiresAt - now < 800 ? " fade" : ""
+        const hs = k.zone === "head" ? `<span class="kf-hs" title="Headshot">&#9678;</span>` : ""
+        return (
+          `<div class="killfeed-item${k.mine ? " mine" : ""}${fade}">` +
+          `<span class="kf-name ${escapeHtml(k.killerCrew)}">${escapeHtml(k.killer)}</span>` +
+          `<span class="kf-gun">${escapeHtml(k.gun)}</span>${hs}` +
+          `<span class="kf-name ${escapeHtml(k.victimCrew)}">${escapeHtml(k.victim)}</span></div>`
+        )
+      })
       .join("")
 
     const me = snap.fighters.find((f) => f.slotId === this.localSlotId)

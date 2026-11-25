@@ -82,6 +82,8 @@ function editState(
   expect(r.ok).toBe(true)
 }
 
+const TORSO_PITCH = Math.atan2(1.1 - 1.56, 6)
+
 describe("Bell Yard 3D physics & verticality", () => {
   it("climbs the West Staircase smoothly onto the Upper Loading Deck (y = 3.6m)", () => {
     let state = { x: -11.5, y: 0, z: -1.6, vx: 0, vy: 0, vz: 0, grounded: true }
@@ -200,8 +202,9 @@ describe("Four distinct weapons, armor overflow, friendly fire, and respawn", ()
       }
     })
 
+    // Aim at the torso (a pitch-0 shot from eye level is a headshot)
     // Fire Linecaster straight along -Z (passes through Cobalt ally slot 1 -> must NOT damage ally -> hits Vermilion slot 3!)
-    rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 1, yaw: 0, pitch: 0, fire: true }) })
+    rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 1, yaw: 0, pitch: TORSO_PITCH, fire: true }) })
     tickN(rt, 1)
     rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 2, yaw: 0, pitch: 0, fire: false }) })
     tickN(rt, 20)
@@ -228,11 +231,11 @@ describe("Four distinct weapons, armor overflow, friendly fire, and respawn", ()
 
     // Fire 2 more Linecaster bolts (48 + 48 = 96 >= 77) to eliminate slot 3
     tickN(rt, 45)
-    rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 3, yaw: 0, pitch: 0, fire: true }) })
+    rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 3, yaw: 0, pitch: TORSO_PITCH, fire: true }) })
     tickN(rt, 1)
     rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 4, yaw: 0, pitch: 0, fire: false }) })
     tickN(rt, 55)
-    rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 5, yaw: 0, pitch: 0, fire: true }) })
+    rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 5, yaw: 0, pitch: TORSO_PITCH, fire: true }) })
     tickN(rt, 1)
     rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 6, yaw: 0, pitch: 0, fire: false }) })
     tickN(rt, 20)
@@ -254,6 +257,64 @@ describe("Four distinct weapons, armor overflow, friendly fire, and respawn", ()
     expect(respawned.armorType).toBe("heavy")
     expect(respawned.primaryGun).toBe("broadside")
     expect(respawned.cosmetics.top).toBe("workJacket")
+  })
+  // Shooter slot 0 at z=5, enemy slot 3 at z=-1 (6m away), eye height 1.56. Aim pitch for a given hit height.
+  const pitchFor = (y: number) => Math.atan2(y - 1.56, 6)
+
+  const zoneShot = (primary: "linecaster" | "rollerSmg" | "proofPistol", armor: "light" | "heavy", y: number, enemyX = 0) => {
+    const humans = [0, 1, 2, 3, 4, 5].map((slotId) => ({
+      slotId,
+      humanId: `h${slotId}`,
+      name: `P${slotId}`,
+      loadout: { primary: (slotId === 0 ? primary : "rollerSmg") as "linecaster" | "rollerSmg", armor: (slotId === 3 ? armor : "light") as "light" | "heavy" },
+      cosmetics: DEFAULT_COSMETICS
+    }))
+    const rt = bootSim(404, humans)
+    editState(rt, {
+      fighter: (f) => {
+        if (f.slotId === 0) return { ...f, x: 0, y: 0, z: 5, yaw: 0, pitch: 0 }
+        if (f.slotId === 3) return { ...f, x: enemyX, y: 0, z: -1, yaw: Math.PI, pitch: 0 }
+        return { ...f, x: -24, y: 0, z: 14 }
+      }
+    })
+    if (primary === "proofPistol") {
+      rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 10, switchSlot: 2, fire: false }) })
+      tickN(rt, 30)
+    }
+    rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 11, yaw: 0, pitch: pitchFor(y), fire: true }) })
+    tickN(rt, 1)
+    rt.send(Intent, { _tag: "SubmitInput", slotId: 0, input: makeInput({ seq: 12, yaw: 0, pitch: pitchFor(y), fire: false }) })
+    tickN(rt, 20)
+    const snap = readSnapshot(rt)
+    return { enemy: snap.fighters.find((f) => f.slotId === 3)!, events: snap.events }
+  }
+
+  it("headshots one-shot with a Linecaster and ignore armor; torso and limbs take less", () => {
+    const head = zoneShot("linecaster", "heavy", 1.6)
+    expect(head.enemy.alive).toBe(false)
+    expect(head.events.some((e) => e.kind === "elim" && e.zone === "head")).toBe(true)
+
+    // Light vest absorbs 25 of the 48 torso damage
+    const torso = zoneShot("linecaster", "light", 1.1)
+    expect(torso.enemy.hp).toBe(100 - (48 - 25))
+    expect(torso.events.some((e) => e.kind === "hit" && e.zone === undefined)).toBe(true)
+
+    // 48 * 0.6 = 29 damage, 25 absorbed by the vest
+    const leg = zoneShot("linecaster", "light", 0.4)
+    expect(leg.enemy.hp).toBe(100 - (29 - 25))
+    expect(leg.events.some((e) => e.kind === "hit" && e.zone === "limb")).toBe(true)
+  })
+
+  it("treats the silhouette edge of the torso as an arm (limb damage)", () => {
+    // Enemy shifted sideways so the bolt grazes the edge of the capsule at chest height
+    const arm = zoneShot("linecaster", "light", 1.1, 0.5)
+    expect(arm.events.some((e) => e.kind === "hit" && e.zone === "limb")).toBe(true)
+    expect(arm.enemy.hp).toBe(100 - (29 - 25))
+  })
+
+  it("pistol headshots need two shots", () => {
+    const head = zoneShot("proofPistol", "light", 1.6)
+    expect(head.enemy.hp).toBe(100 - 50)
   })
 })
 

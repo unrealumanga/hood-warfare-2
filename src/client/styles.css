@@ -440,6 +440,27 @@ body,
   opacity: 1;
 }
 
+.hitmarker.head {
+  width: 38px;
+  height: 38px;
+}
+
+.hitmarker.head::before {
+  left: 18px;
+  height: 38px;
+  background: var(--ochre);
+}
+
+.hitmarker.head::after {
+  top: 18px;
+  width: 38px;
+  background: var(--ochre);
+}
+
+.hitmarker.limb {
+  opacity: 0.55;
+}
+
 .hitmarker::before,
 .hitmarker::after {
   content: "";
@@ -553,10 +574,62 @@ body,
 }
 
 .killfeed-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: rgba(247, 248, 244, 0.88);
   border-left: 4px solid var(--ink-dark);
-  padding: 3px 8px;
-  font-size: 11px;
+  padding: 4px 10px;
+  font-size: 12px;
+  animation: kf-in 0.18s ease-out;
+  transition: opacity 0.8s ease;
+}
+
+.killfeed-item.mine {
+  background: rgba(247, 248, 244, 0.97);
+  outline: 2px solid var(--ochre);
+}
+
+.killfeed-item.fade {
+  opacity: 0;
+}
+
+.kf-name {
+  font-weight: 700;
+}
+
+.kf-name.cobalt {
+  color: var(--cobalt);
+}
+
+.kf-name.vermilion {
+  color: var(--vermilion);
+}
+
+.kf-gun {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+
+.kf-hs {
+  color: var(--vermilion);
+  font-weight: 700;
+}
+
+@keyframes kf-in {
+  from {
+    opacity: 0;
+    transform: translateX(14px);
+  }
+}
+
+#hud-killfeed {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
 }
 
 /* Respawn / Pending Takeover Banner */

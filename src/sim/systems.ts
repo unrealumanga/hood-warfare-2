@@ -3,7 +3,13 @@ import {
   ANOMALY_CYCLE_TICKS,
   ANOMALY_DURATION_TICKS,
   ARMORS,
+  ARM_LATERAL,
   BARREL_BLAST_DAMAGE,
+  HEAD_BYPASSES_ARMOR,
+  HEAD_MIN_Y,
+  HIT_ZONE_MULT,
+  LEG_MAX_Y,
+  type HitZone,
   BARREL_BLAST_RADIUS,
   BOT_NAMES,
   DEFAULT_COSMETICS,
@@ -1826,14 +1832,17 @@ export const StepCombatAndMatch = Game.System(
       shotEventId: number,
       hitX: number,
       hitY: number,
-      hitZ: number
+      hitZ: number,
+      zone: HitZone = "torso"
     ) => {
       const targetEntry = fighterEntries[targetIdx]!
       const victim = targetEntry.data
       if (!victim.alive) return
-      const prevArmor = victim.armor
+      damage = Math.max(1, Math.round(damage * HIT_ZONE_MULT[zone]))
+      const eventZone = zone === "torso" ? undefined : zone
+      const prevArmor = zone === "head" && HEAD_BYPASSES_ARMOR ? 0 : victim.armor
       const absorbed = Math.min(prevArmor, damage)
-      const nextArmor = prevArmor - absorbed
+      const nextArmor = victim.armor - absorbed
       const overflow = damage - absorbed
       const nextHp = Math.max(0, victim.hp - overflow)
       const brokeArmor = prevArmor > 0 && nextArmor === 0
@@ -1848,7 +1857,8 @@ export const StepCombatAndMatch = Game.System(
           x: hitX,
           y: hitY,
           z: hitZ,
-          damage
+          damage,
+          zone: eventZone
         })
       }
 
@@ -1877,7 +1887,8 @@ export const StepCombatAndMatch = Game.System(
           x: hitX,
           y: hitY,
           z: hitZ,
-          damage
+          damage,
+          zone: eventZone
         })
       } else {
         targetEntry.data = { ...victim, hp: nextHp, armor: nextArmor }
@@ -1890,7 +1901,8 @@ export const StepCombatAndMatch = Game.System(
           x: hitX,
           y: hitY,
           z: hitZ,
-          damage
+          damage,
+          zone: eventZone
         })
       }
     }
@@ -1995,6 +2007,18 @@ export const StepCombatAndMatch = Game.System(
         const hitY = proj.y + (ny - proj.y) * bestT
         const hitZ = proj.z + (nz - proj.z) * bestT
         const victim = fighterEntries[hitIdx]!.data
+        const relY = hitY - victim.y
+        let zone: HitZone = relY >= HEAD_MIN_Y ? "head" : relY < LEG_MAX_Y ? "limb" : "torso"
+        if (zone === "torso") {
+          // Distance of the bullet's line from the body axis: silhouette edges are arms.
+          const ddx = nx - proj.x
+          const ddz = nz - proj.z
+          const dlen = Ops.hypot(ddx, ddz)
+          if (dlen > 1e-6) {
+            const lateral = Math.abs((victim.x - proj.x) * ddz - (victim.z - proj.z) * ddx) / dlen
+            if (lateral > ARM_LATERAL) zone = "limb"
+          }
+        }
 
         // Timed Melee Ink Parry reflects opposing projectiles!
         if (victim.parryTicksLeft > 0) {
@@ -2031,7 +2055,8 @@ export const StepCombatAndMatch = Game.System(
             proj.shotEventId,
             hitX,
             hitY,
-            hitZ
+            hitZ,
+            zone
           )
           commands.despawn(pEntity)
         }

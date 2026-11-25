@@ -10,6 +10,14 @@ export const SLOTS_COUNT = 6 // Default 3v3
 
 export const PLAYER_MAX_HP = 100
 export const PLAYER_RADIUS = 0.42
+
+// Hit zones, measured from the fighter's feet. Eye level (1.56) is inside the head band.
+export type HitZone = "head" | "torso" | "limb"
+export const HEAD_MIN_Y = 1.4 // at/above: head
+export const LEG_MAX_Y = 0.8 // below: legs (limb)
+export const ARM_LATERAL = 0.22 // torso hit this far off the body axis (silhouette edge): arm (limb)
+export const HIT_ZONE_MULT: Record<HitZone, number> = { head: 2.5, torso: 1, limb: 0.6 }
+export const HEAD_BYPASSES_ARMOR = true
 export const PLAYER_HEIGHT = 1.78
 export const PLAYER_EYE_HEIGHT = 1.56
 export const PLAYER_BASE_SPEED = 7.4 // m/s
