@@ -2,6 +2,13 @@
 
 A 3D first-person arcade shooter set in **Bell Yard**, an Inkline Town–inspired printworks district, built with TypeScript, [`@typeonce/ritmo`](https://github.com/typeonce-dev/ritmo), Three.js, Vite, and WebSockets (`ws`).
 
+### [▶ Play now](https://unrealumanga.github.io/hood-warfare-2/)
+
+![Courtyard](docs/courtyard.png)
+![Deck](docs/deck.png)
+
+Play Offline works on GitHub Pages. Play Online needs the Node WebSocket server (`npm run dev:all`), so it only works locally.
+
 ---
 
 ## Features
