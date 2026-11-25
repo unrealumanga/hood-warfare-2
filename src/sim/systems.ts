@@ -5,7 +5,24 @@ import {
   ARMORS,
   ARM_LATERAL,
   BARREL_BLAST_DAMAGE,
+  ALLY_BOT_LEVEL,
+  BOSS_ARMOR,
+  BOSS_GUN,
+  BOSS_HP,
+  BOSS_KILL_SCORE,
+  BOSS_MODES,
+  BOSS_NAME,
+  BOSS_SKILL_BONUS,
+  BOSS_SPAWN_TICK,
+  BOT_SEEK_HEALTH_HP,
   DIFFICULTY_DEFAULT,
+  DIFFICULTY_KILLS_PER_STEP,
+  HEALTH_PICKUP_ARMOR,
+  HEALTH_PICKUP_HEAL,
+  HEALTH_PICKUP_MODES,
+  HEALTH_PICKUP_RADIUS,
+  HEALTH_PICKUP_RESPAWN_TICKS,
+  botSkill,
   DIFFICULTY_MAX,
   DIFFICULTY_MIN,
   HEALTH_PICKUP_FIRST_SPAWN_TICKS,
@@ -284,6 +301,7 @@ export function makeDefaultMatchState(
       respawnTicksLeft: HEALTH_PICKUP_FIRST_SPAWN_TICKS
     },
     difficulty: clamp(Math.round(options.difficulty ?? DIFFICULTY_DEFAULT), DIFFICULTY_MIN, DIFFICULTY_MAX),
+    baseDifficulty: clamp(Math.round(options.difficulty ?? DIFFICULTY_DEFAULT), DIFFICULTY_MIN, DIFFICULTY_MAX),
     bossSlot: -1,
     bossDefeated: false,
     pendingDifficulty: null,
@@ -832,6 +850,7 @@ export const RunBotAI = Game.System(
 
     const defaultGoalWpId = muralWaypointId(match.activeMuralId)
     const activeZone = MURAL_ZONES[match.activeMuralId]!
+    const pickupLive = match.healthPickup.available
 
     for (const entry of fighters) {
       const bot = entry.data
@@ -898,6 +917,22 @@ export const RunBotAI = Game.System(
         }
       }
 
+      if (bot.isBoss) {
+        // The boss hunts the closest living opponent instead of holding the objective
+        let huntDist = 1e9
+        for (const otherEntry of fighters) {
+          const other = otherEntry.data
+          if (!other.alive || other.crew === bot.crew) continue
+          const d = Ops.hypot(other.x - bot.x, other.z - bot.z)
+          if (d < huntDist) {
+            huntDist = d
+            goalWpId = findNearestWaypoint(other.x, other.y, other.z)
+          }
+        }
+      } else if (pickupLive && bot.hp < BOT_SEEK_HEALTH_HP) {
+        goalWpId = findNearestWaypoint(match.healthPickup.x, match.healthPickup.y, match.healthPickup.z)
+      }
+
       const curWpId = findNearestWaypoint(bot.x, bot.y, bot.z)
       const nextWpId = nextWaypointToward(curWpId, goalWpId, dynamicEdges)
       const nextWp = MAP_WAYPOINTS[nextWpId]!
@@ -928,14 +963,18 @@ export const RunBotAI = Game.System(
         const dy = target.y + 1.15 - eyeY
         const dz = target.z - bot.z
         const horiz = Math.max(0.01, Ops.hypot(dx, dz))
-        const jitterYaw = (random.next() - 0.5) * 0.085
-        const jitterPitch = (random.next() - 0.5) * 0.055
+        // Skill: red bots follow the match difficulty (the boss plays above it), allies stay at a fixed level
+        const skill = botSkill(
+          bot.isBoss ? match.difficulty + BOSS_SKILL_BONUS : bot.crew === 1 ? match.difficulty : ALLY_BOT_LEVEL
+        )
+        const jitterYaw = (random.next() - 0.5) * skill.jitterYaw
+        const jitterPitch = (random.next() - 0.5) * skill.jitterPitch
         aimYaw = Ops.atan2(-dx, -dz) + jitterYaw
         aimPitch = clamp(Ops.atan2(dy, horiz) + jitterPitch, -0.9, 0.9)
 
         const gun = GUNS[activeGunId(bot)]
-        const maxRange = gun.id === "broadside" ? 13 : 26
-        if (bestTargetDist <= maxRange) {
+        const maxRange = (gun.id === "broadside" ? 13 : 26) * skill.rangeScale
+        if (bestTargetDist <= maxRange && random.next() < skill.fireChance) {
           fire = gun.automatic ? true : !bot.wasFireHeld
         }
 
@@ -1019,6 +1058,10 @@ export const StepCombatAndMatch = Game.System(
     let nextShotEventId = matchPrev.nextShotEventId
     let nextConstructId = matchPrev.nextConstructId
     let nextSmokeId = matchPrev.nextSmokeId
+    let healthPickup = matchPrev.healthPickup
+    let bossSlot = matchPrev.bossSlot
+    let bossDefeated = matchPrev.bossDefeated
+    let bossDownCrew: CrewId | null = null
 
     const inputsBySlot = resources.inputs.get().bySlot
     const fighterEntries = queries.fighters.each().map((entity) => ({
@@ -1462,6 +1505,61 @@ export const StepCombatAndMatch = Game.System(
 
     const dynamicSolids = buildDynamicSolids(constructs, cableCar)
 
+    // 1b. The boss enters: the lowest red bot is promoted once per match
+    if (nextTick === BOSS_SPAWN_TICK && bossSlot < 0 && BOSS_MODES.includes(matchPrev.mode)) {
+      let pick: (typeof fighterEntries)[number] | null = null
+      for (const e of fighterEntries) {
+        if (e.data.crew !== 1 || !e.data.isBot) continue
+        if (pick === null || e.data.slotId < pick.data.slotId) pick = e
+      }
+      if (pick !== null) {
+        const bf = pick.data
+        const bspawn = getSpawnForSlot(bf.slotId, matchPrev.totalSlots)
+        const bArmor = ARMORS[BOSS_ARMOR].maxArmor
+        pick.data = {
+          ...bf,
+          name: BOSS_NAME,
+          isBoss: true,
+          maxHp: BOSS_HP,
+          hp: BOSS_HP,
+          armor: bArmor,
+          maxArmor: bArmor,
+          armorType: BOSS_ARMOR,
+          primaryGun: BOSS_GUN,
+          activeSlot: 1,
+          primaryAmmo: GUNS[BOSS_GUN].magSize,
+          sidearmAmmo: GUNS.proofPistol.magSize,
+          reloadTicksLeft: 0,
+          fireCooldownTicks: 0,
+          alive: true,
+          respawnTicksLeft: 0,
+          x: bspawn.x,
+          y: bspawn.y,
+          z: bspawn.z,
+          vx: 0,
+          vy: 0,
+          vz: 0,
+          yaw: bspawn.yaw,
+          grounded: true,
+          grapple: null,
+          carryingScrap: 0,
+          cosmetics: { top: "workJacket", hat: "cap", swatch: "charcoal" }
+        }
+        bossSlot = bf.slotId
+        nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+          kind: "bossSpawn",
+          shotEventId: 0,
+          actorSlot: bf.slotId,
+          targetSlot: null,
+          gunId: BOSS_GUN,
+          x: bspawn.x,
+          y: bspawn.y + 1,
+          z: bspawn.z,
+          damage: BOSS_HP
+        })
+      }
+    }
+
     // 2. Step respawn, cable-car riding, grapple travel, movement, reloading, and firing
     for (let idx = 0; idx < fighterEntries.length; idx++) {
       const entry = fighterEntries[idx]!
@@ -1488,7 +1586,11 @@ export const StepCombatAndMatch = Game.System(
             ...f,
             isBot: promotedHuman ? false : f.isBot,
             humanId: promotedHuman ? f.pendingHumanId : f.humanId,
-            name: promotedHuman ? (f.pendingHumanName ?? f.name) : f.name,
+            name: f.isBoss
+              ? BOT_NAMES[f.slotId % BOT_NAMES.length]!
+              : promotedHuman
+                ? (f.pendingHumanName ?? f.name)
+                : f.name,
             pendingHumanId: null,
             pendingHumanName: null,
             pendingLoadout: null,
@@ -1907,6 +2009,22 @@ export const StepCombatAndMatch = Game.System(
           damage,
           zone: eventZone
         })
+        if (victim.isBoss) {
+          bossDefeated = true
+          const killerCrew = killerEntry && killerEntry.data.slotId !== victim.slotId ? killerEntry.data.crew : null
+          bossDownCrew = killerCrew
+          nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+            kind: "bossDown",
+            shotEventId,
+            actorSlot,
+            targetSlot: victim.slotId,
+            gunId,
+            x: hitX,
+            y: hitY,
+            z: hitZ,
+            damage: BOSS_KILL_SCORE
+          })
+        }
       } else {
         targetEntry.data = { ...victim, hp: nextHp, armor: nextArmor }
         nextEventSeq = pushEvent(feedItems, nextEventSeq, {
@@ -2204,6 +2322,8 @@ export const StepCombatAndMatch = Game.System(
     let foundry = matchPrev.foundry
     let winner = matchPrev.winner
     let finishNow = false
+    if (bossDownCrew === 0) score0 += BOSS_KILL_SCORE
+    else if (bossDownCrew === 1) score1 += BOSS_KILL_SCORE
 
     if (matchPrev.mode === "mural") {
       let cobaltInZone = false
@@ -2491,6 +2611,62 @@ export const StepCombatAndMatch = Game.System(
       nextMachines.phase.transition({ from: "Playing", to: "Finished" })
     }
 
+    // Health booster: one pickup in the middle of the map. Whoever reaches it first (closest, then lowest slot)
+    // and actually needs it takes it; it then respawns after HEALTH_PICKUP_RESPAWN_TICKS.
+    if (HEALTH_PICKUP_MODES.includes(matchPrev.mode)) {
+      if (!healthPickup.available) {
+        const left = healthPickup.respawnTicksLeft - 1
+        healthPickup = left <= 0 ? { ...healthPickup, available: true, respawnTicksLeft: 0 } : { ...healthPickup, respawnTicksLeft: left }
+      } else {
+        let bestIdx = -1
+        let bestDist = HEALTH_PICKUP_RADIUS
+        for (let i = 0; i < fighterEntries.length; i++) {
+          const f = fighterEntries[i]!.data
+          if (!f.alive || (f.hp >= f.maxHp && f.armor >= f.maxArmor)) continue
+          if (Math.abs(f.y - healthPickup.y) > 1.6) continue
+          const d = Ops.hypot(f.x - healthPickup.x, f.z - healthPickup.z)
+          const better = d < bestDist || (d === bestDist && bestIdx >= 0 && f.slotId < fighterEntries[bestIdx]!.data.slotId)
+          if (better) {
+            bestDist = d
+            bestIdx = i
+          }
+        }
+        if (bestIdx >= 0) {
+          const entry = fighterEntries[bestIdx]!
+          const f = entry.data
+          const healed = Math.min(f.maxHp, f.hp + HEALTH_PICKUP_HEAL) - f.hp
+          entry.data = {
+            ...f,
+            hp: f.hp + healed,
+            armor: Math.min(f.maxArmor, f.armor + HEALTH_PICKUP_ARMOR)
+          }
+          healthPickup = { ...healthPickup, available: false, respawnTicksLeft: HEALTH_PICKUP_RESPAWN_TICKS }
+          nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+            kind: "pickup",
+            shotEventId: 0,
+            actorSlot: f.slotId,
+            targetSlot: null,
+            gunId: null,
+            x: healthPickup.x,
+            y: healthPickup.y + 1,
+            z: healthPickup.z,
+            damage: healed
+          })
+        }
+      }
+    }
+
+    // Difficulty ramp: +1 level per DIFFICULTY_KILLS_PER_STEP kills made by the cobalt team (the player's side)
+    let cobaltKills = 0
+    for (const entry of fighterEntries) {
+      if (entry.data.crew === 0) cobaltKills += entry.data.kills
+    }
+    const difficulty = clamp(
+      matchPrev.baseDifficulty + Math.floor(cobaltKills / DIFFICULTY_KILLS_PER_STEP),
+      DIFFICULTY_MIN,
+      DIFFICULTY_MAX
+    )
+
     // Commit all updated fighters back to Ritmo ECS
     for (const entry of fighterEntries) {
       queries.fighters.data.fighter.set(entry.entity, entry.data)
@@ -2498,6 +2674,10 @@ export const StepCombatAndMatch = Game.System(
 
     resources.match.set({
       ...matchPrev,
+      healthPickup,
+      difficulty,
+      bossSlot,
+      bossDefeated,
       anomalyActive,
       anomalyTicksLeft,
       tickCount: nextTick,

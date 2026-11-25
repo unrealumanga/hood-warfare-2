@@ -309,6 +309,7 @@ export interface MatchStateData {
   readonly foundry: FoundryData | null
   readonly healthPickup: HealthPickupData
   readonly difficulty: number
+  readonly baseDifficulty: number // starting level; difficulty = base + 1 per DIFFICULTY_KILLS_PER_STEP cobalt kills
   readonly bossSlot: number // -1 = no boss has entered yet
   readonly bossDefeated: boolean
   readonly pendingDifficulty: number | null

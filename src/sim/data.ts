@@ -393,3 +393,30 @@ export const BOSS_GUN: PrimaryGunId = "broadside"
 export const BOSS_SCALE = 1.35
 export const BOSS_NAME = "Chief Compositor"
 export const BOSS_KILL_SCORE = 10
+
+export const HEALTH_PICKUP_MODES: ReadonlyArray<GameModeId> = ["mural", "foundry"]
+export const BOSS_MODES: ReadonlyArray<GameModeId> = ["mural", "foundry"]
+/** Cobalt bots (the player's allies) always play at this fixed level; the red team follows the match difficulty. */
+export const ALLY_BOT_LEVEL = 6
+/** A bot with hp below this walks to the health booster when it is available. */
+export const BOT_SEEK_HEALTH_HP = 45
+/** The boss plays this many levels above the current difficulty. */
+export const BOSS_SKILL_BONUS = 3
+
+export interface BotSkill {
+  readonly jitterYaw: number // total width of the aim error band (radians)
+  readonly jitterPitch: number
+  readonly fireChance: number // chance per tick to pull the trigger while a target is in range
+  readonly rangeScale: number // multiplier on the gun's engagement range
+}
+
+/** Difficulty level 0..10 -> aim error, trigger discipline and engagement range. Plain +,-,* only (deterministic). */
+export function botSkill(level: number): BotSkill {
+  const t = Math.min(DIFFICULTY_MAX, Math.max(DIFFICULTY_MIN, level)) / DIFFICULTY_MAX
+  return {
+    jitterYaw: 0.32 - 0.285 * t, // level 0: 0.32 rad, 10: 0.035 (the old fixed value was 0.085)
+    jitterPitch: 0.22 - 0.195 * t,
+    fireChance: 0.45 + 0.55 * t,
+    rangeScale: 0.6 + 0.4 * t
+  }
+}
