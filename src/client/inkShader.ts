@@ -351,8 +351,12 @@ export function disposeObject3D(root: THREE.Object3D): void {
     if (obj instanceof THREE.Mesh || obj instanceof THREE.LineSegments) {
       obj.geometry.dispose()
       if (Array.isArray(obj.material)) {
-        for (const m of obj.material) m.dispose()
+        for (const m of obj.material) {
+          if (m.map) m.map.dispose()
+          m.dispose()
+        }
       } else {
+        if (obj.material.map) obj.material.map.dispose()
         obj.material.dispose()
       }
     }
