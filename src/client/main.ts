@@ -122,9 +122,6 @@ function formatClock(ticks: number): string {
   return `${m}:${s < 10 ? "0" : ""}${s}`
 }
 
-function escapeHtml(text: string): string {
-  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!)
-}
 
 class HoodWarfareApp {
   private readonly root: HTMLElement
@@ -180,7 +177,10 @@ class HoodWarfareApp {
   private predictedFireCooldown = 0
   private predictedWasFireHeld = false
 
+  private killfeedSeq = 0
+  private readonly killfeedEls = new Map<number, HTMLElement>()
   private readonly killfeed: Array<{
+    readonly id: number
     readonly killer: string
     readonly victim: string
     readonly killerCrew: string
@@ -190,7 +190,6 @@ class HoodWarfareApp {
     readonly mine: boolean
     readonly expiresAt: number
   }> = []
-  private hitmarkerTimeout: ReturnType<typeof setTimeout> | null = null
 
   // DOM References
   private readonly titleOverlay: HTMLElement
@@ -1038,7 +1037,7 @@ class HoodWarfareApp {
   private startOfflineMatch(): void {
     this.stopAllLoops()
     this.scene.resetMatchState()
-    this.killfeed.length = 0
+    this.clearKillfeed()
     this.mode = "offline"
     this.localSlotId = 0
     this.localHumanId = "local"
@@ -1146,7 +1145,7 @@ class HoodWarfareApp {
   private enterOnlineMatch(): void {
     this.stopAllLoops()
     this.scene.resetMatchState()
-    this.killfeed.length = 0
+    this.clearKillfeed()
     this.mode = "onlineMatch"
     this.menuOpen = false
     this.inputSeq = 0
@@ -1294,21 +1293,21 @@ class HoodWarfareApp {
           if (ev.zone === "head") this.audio.playHeadshot()
           else if (ev.zone === "limb") this.audio.playLimbHit()
           else this.audio.playHit()
-          this.flashHitmarker(ev.zone)
+          this.flashHitmarker(ev.zone, "hit")
           this.spawnHitFloater(ev)
         }
         break
       case "armorBreak":
         if (isLocalActor || isLocalTarget) {
           this.audio.playArmorBreak()
-          if (isLocalActor) this.flashHitmarker(ev.zone)
+          if (isLocalActor) this.flashHitmarker(ev.zone, "hit")
         }
         break
       case "elim": {
         if (isLocalActor) {
           this.audio.playElim()
           if (ev.zone === "head") this.audio.playHeadshot()
-          this.flashHitmarker(ev.zone)
+          this.flashHitmarker(ev.zone, "kill")
           this.spawnHitFloater(ev)
         }
         const actor = this.currentSnapshot?.fighters.find((f) => f.slotId === ev.actorSlot)
@@ -1316,6 +1315,7 @@ class HoodWarfareApp {
         if (actor && target) {
           const gunName = ev.gunId ? GUNS[ev.gunId].name : "Ink"
           this.killfeed.push({
+            id: ++this.killfeedSeq,
             killer: actor.name,
             victim: target.name,
             killerCrew: actor.crew === 0 ? "cobalt" : "vermilion",
@@ -1380,13 +1380,55 @@ class HoodWarfareApp {
     setTimeout(() => el.remove(), 900)
   }
 
-  private flashHitmarker(zone?: string): void {
+  private clearKillfeed(): void {
+    this.killfeed.length = 0
+    for (const el of this.killfeedEls.values()) el.remove()
+    this.killfeedEls.clear()
+  }
+
+  /** Touch the DOM only when an entry appears, starts fading or expires. updateHud runs every sim tick; rewriting
+   * innerHTML there restarted the slide-in animation each frame and made the feed blink. */
+  private syncKillfeed(now: number): void {
+    const host = this.q("#hud-killfeed")
+    for (let i = this.killfeed.length - 1; i >= 0; i--) {
+      if (this.killfeed[i]!.expiresAt <= now) this.killfeed.splice(i, 1)
+    }
+    const live = new Set<number>()
+    for (const k of this.killfeed) {
+      live.add(k.id)
+      let el = this.killfeedEls.get(k.id)
+      if (!el) {
+        el = document.createElement("div")
+        el.className = `killfeed-item${k.mine ? " mine" : ""}`
+        const part = (cls: string, text: string): HTMLElement => {
+          const span = document.createElement("span")
+          span.className = cls
+          span.textContent = text
+          return span
+        }
+        el.append(part(`kf-name ${k.killerCrew}`, k.killer), part("kf-gun", k.gun))
+        if (k.zone === "head") el.append(part("kf-hs", "\u25CE"))
+        el.append(part(`kf-name ${k.victimCrew}`, k.victim))
+        host.appendChild(el)
+        this.killfeedEls.set(k.id, el)
+      }
+      el.classList.toggle("fade", k.expiresAt - now < 800)
+    }
+    for (const [id, el] of this.killfeedEls) {
+      if (!live.has(id)) {
+        el.remove()
+        this.killfeedEls.delete(id)
+      }
+    }
+  }
+
+  /** One-shot hit indicator. The CSS animation ends at opacity 0 by itself, so it cannot stay on screen.
+   * kind: hit = yellow cross, kill = red cross; zone head = larger, limb = smaller. */
+  private flashHitmarker(zone?: string, kind: "hit" | "kill" = "hit"): void {
     const hm = this.q("#hitmarker")
-    hm.classList.remove("head", "limb")
-    if (zone === "head" || zone === "limb") hm.classList.add(zone)
+    hm.className = `hitmarker ${kind}${zone === "head" || zone === "limb" ? ` ${zone}` : ""}`
+    void hm.offsetWidth // restart the animation even when hits arrive back to back
     hm.classList.add("show")
-    if (this.hitmarkerTimeout !== null) clearTimeout(this.hitmarkerTimeout)
-    this.hitmarkerTimeout = setTimeout(() => hm.classList.remove("show"), 120)
   }
 
   private updateHud(snap: MatchSnapshot): void {
@@ -1441,19 +1483,7 @@ class HoodWarfareApp {
     }
 
     const now = performance.now()
-    const activeFeed = this.killfeed.filter((k) => k.expiresAt > now)
-    this.q("#hud-killfeed").innerHTML = activeFeed
-      .map((k) => {
-        const fade = k.expiresAt - now < 800 ? " fade" : ""
-        const hs = k.zone === "head" ? `<span class="kf-hs" title="Headshot">&#9678;</span>` : ""
-        return (
-          `<div class="killfeed-item${k.mine ? " mine" : ""}${fade}">` +
-          `<span class="kf-name ${escapeHtml(k.killerCrew)}">${escapeHtml(k.killer)}</span>` +
-          `<span class="kf-gun">${escapeHtml(k.gun)}</span>${hs}` +
-          `<span class="kf-name ${escapeHtml(k.victimCrew)}">${escapeHtml(k.victim)}</span></div>`
-        )
-      })
-      .join("")
+    this.syncKillfeed(now)
 
     const me = snap.fighters.find((f) => f.slotId === this.localSlotId)
     if (!me) return

@@ -426,60 +426,70 @@ body,
 }
 
 .hitmarker {
+  --hm-color: #f2c14e;
+  --hm-size: 26px;
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 26px;
-  height: 26px;
+  width: var(--hm-size);
+  height: var(--hm-size);
   transform: translate(-50%, -50%) rotate(45deg);
   opacity: 0;
-  transition: opacity 0.08s ease;
+  pointer-events: none;
 }
 
-.hitmarker.show {
-  opacity: 1;
+.hitmarker.kill {
+  --hm-color: #d8412f;
 }
 
 .hitmarker.head {
-  width: 38px;
-  height: 38px;
-}
-
-.hitmarker.head::before {
-  left: 18px;
-  height: 38px;
-  background: var(--ochre);
-}
-
-.hitmarker.head::after {
-  top: 18px;
-  width: 38px;
-  background: var(--ochre);
+  --hm-size: 38px;
 }
 
 .hitmarker.limb {
-  opacity: 0.55;
+  --hm-size: 20px;
+}
+
+/* Runs once and ends at opacity 0: nothing to clear, so it can never get stuck on screen. */
+.hitmarker.show {
+  animation: hm-pulse 0.2s ease-out forwards;
+}
+
+.hitmarker.show.kill {
+  animation-duration: 0.42s;
 }
 
 .hitmarker::before,
 .hitmarker::after {
   content: "";
   position: absolute;
-  background: var(--vermilion);
+  background: var(--hm-color);
+  box-shadow: 0 0 0 1px rgba(34, 44, 39, 0.55);
 }
 
 .hitmarker::before {
-  left: 12px;
+  left: calc(50% - 1.5px);
   top: 0;
-  width: 2px;
-  height: 26px;
+  width: 3px;
+  height: 100%;
 }
 
 .hitmarker::after {
-  top: 12px;
+  top: calc(50% - 1.5px);
   left: 0;
-  height: 2px;
-  width: 26px;
+  height: 3px;
+  width: 100%;
+}
+
+@keyframes hm-pulse {
+  0% {
+    opacity: 1;
+    scale: 1.25;
+  }
+  100% {
+    opacity: 0;
+    scale: 1;
+  }
 }
 
 /* Bottom Left: Health & Armor */
