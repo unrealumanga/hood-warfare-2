@@ -6,7 +6,7 @@ import { createInkMaterial, createShopSignTexture } from "./inkShader.ts"
  * Bell Yard eye-level print district detailing.
  * All repeated geometry is batched into InstancedMeshes; shallow trim inherits host collision.
  */
-export function addYardDetails(scene: THREE.Scene): void {
+export function addYardDetails(scene: THREE.Scene | THREE.Group): void {
   const steel = 0x47524d
   const darkIron = 0x2c3531
   const zinc = 0x849089

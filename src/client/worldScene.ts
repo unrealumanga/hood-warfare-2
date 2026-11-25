@@ -1,20 +1,13 @@
+import { MAPS, type MapDef, type MapBox } from "../sim/index.ts"
+import { addOverprintDetails } from "./overprintDetails.ts"
 import { addYardDetails } from "./yardDetails.ts"
 import * as THREE from "three"
 import {
-  ANOMALY_COURTYARD,
   ARMORS,
   BOSS_SCALE,
-  CABLE_CAR_SPLINE,
   CREWS,
-  EXTRACTION_EXIT,
-  EXTRACTION_VAULT,
-  FOUNDRY_CENTER,
-  GRAPPLE_LEDGES,
   GUNS,
-  MAP_BOXES,
-  MURAL_ZONES,
   PLAYER_EYE_HEIGHT,
-  SKETCH_ANCHORS,
   TICK_HZ,
   buildDynamicSolids,
   stepPlayerMovement,
@@ -78,6 +71,8 @@ export class BellYardScene {
   private readonly renderer: THREE.WebGLRenderer
   private readonly worldScene = new THREE.Scene()
   private readonly vmScene = new THREE.Scene()
+  private readonly mapGeometry = new THREE.Group()
+  private mapDef: MapDef = MAPS.bellYard
   private readonly camera: THREE.PerspectiveCamera
   private readonly vmCamera: THREE.PerspectiveCamera
 
@@ -163,8 +158,9 @@ export class BellYardScene {
 
     this.setupLighting(this.worldScene)
     this.setupLighting(this.vmScene)
+    this.worldScene.add(this.mapGeometry)
     this.buildBellYardGeometry()
-    addYardDetails(this.worldScene)
+    addYardDetails(this.mapGeometry)
 
     // Translucent active mural capture zone boundary ring & corner beacons
     this.zoneRing = new THREE.Group()
@@ -254,8 +250,8 @@ export class BellYardScene {
     this.worldScene.add(this.foremanGroup)
 
     // Milestone 7: Low-Gravity Courtyard Anomaly glowing perimeter frame
-    const aW = ANOMALY_COURTYARD.maxX - ANOMALY_COURTYARD.minX
-    const aD = ANOMALY_COURTYARD.maxZ - ANOMALY_COURTYARD.minZ
+    const aW = this.mapDef.anomalyCourtyard.maxX - this.mapDef.anomalyCourtyard.minX
+    const aD = this.mapDef.anomalyCourtyard.maxZ - this.mapDef.anomalyCourtyard.minZ
     this.anomalyBorder = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(aW, 0.3, aD)),
       new THREE.LineBasicMaterial({ color: 0x3b72c4, transparent: true, opacity: 0.85 })
@@ -265,28 +261,17 @@ export class BellYardScene {
     this.worldScene.add(this.anomalyBorder)
 
     // Milestone 8: Overhead Cable Car platform + steel rail cable
-    const cableGeo = new THREE.BufferGeometry()
-    const cablePts: Array<THREE.Vector3> = []
-    for (let i = 0; i <= 24; i++) {
-      const t = i / 24
-      const cx = CABLE_CAR_SPLINE.startX + (CABLE_CAR_SPLINE.endX - CABLE_CAR_SPLINE.startX) * t
-      const cy = CABLE_CAR_SPLINE.baseY + Math.sin(Math.PI * t) * CABLE_CAR_SPLINE.archY + 2.35
-      cablePts.push(new THREE.Vector3(cx, cy, CABLE_CAR_SPLINE.z))
-    }
-    cableGeo.setFromPoints(cablePts)
-    this.worldScene.add(
-      new THREE.Line(cableGeo, new THREE.LineBasicMaterial({ color: INKLINE_PALETTE.inkDark }))
-    )
+    this.buildCableRail()
 
     const carDeck = new THREE.Mesh(
       new THREE.BoxGeometry(
-        CABLE_CAR_SPLINE.halfW * 2,
-        CABLE_CAR_SPLINE.thickness,
-        CABLE_CAR_SPLINE.halfD * 2
+        this.mapDef.cableCarSpline.halfW * 2,
+        this.mapDef.cableCarSpline.thickness,
+        this.mapDef.cableCarSpline.halfD * 2
       ),
       createInkMaterial(INKLINE_PALETTE.ochre, { hatchStrength: 0.26 })
     )
-    carDeck.position.y = -CABLE_CAR_SPLINE.thickness * 0.5
+    carDeck.position.y = -this.mapDef.cableCarSpline.thickness * 0.5
     carDeck.castShadow = true
     addInkEdges(carDeck, 22)
     this.cableCarGroup.add(carDeck)
@@ -309,13 +294,13 @@ export class BellYardScene {
       new THREE.CylinderGeometry(1.1, 1.1, 0.14, 16),
       new THREE.MeshBasicMaterial({ color: INKLINE_PALETTE.ochre, transparent: true, opacity: 0.55 })
     )
-    vaultBeacon.position.set(EXTRACTION_VAULT.x, EXTRACTION_VAULT.y + 0.08, EXTRACTION_VAULT.z)
+    vaultBeacon.position.set(this.mapDef.extractionVault.x, this.mapDef.extractionVault.y + 0.08, this.mapDef.extractionVault.z)
     this.extractionMarkers.add(vaultBeacon)
     const exitBeacon = new THREE.Mesh(
       new THREE.CylinderGeometry(1.8, 1.8, 0.14, 20),
       new THREE.MeshBasicMaterial({ color: INKLINE_PALETTE.cobalt, transparent: true, opacity: 0.5 })
     )
-    exitBeacon.position.set(EXTRACTION_EXIT.x, EXTRACTION_EXIT.y + 0.08, EXTRACTION_EXIT.z)
+    exitBeacon.position.set(this.mapDef.extractionExit.x, this.mapDef.extractionExit.y + 0.08, this.mapDef.extractionExit.z)
     this.extractionMarkers.add(exitBeacon)
     this.extractionMarkers.visible = false
     this.worldScene.add(this.extractionMarkers)
@@ -324,7 +309,7 @@ export class BellYardScene {
       new THREE.BoxGeometry(2.1, 1.6, 2.1),
       createInkMaterial(0x4b5650, { hatchStrength: 0.3 })
     )
-    pressBase.position.set(FOUNDRY_CENTER.x, 0.8, FOUNDRY_CENTER.z)
+    pressBase.position.set(this.mapDef.foundryCenter.x, 0.8, this.mapDef.foundryCenter.z)
     addInkEdges(pressBase, 22)
     this.foundrySiegeGroup.add(pressBase)
     this.foundrySiegeGroup.visible = false
@@ -334,11 +319,84 @@ export class BellYardScene {
     this.lastRenderMs = performance.now()
   }
 
+  private buildCableRail(): void {
+    const cableGeo = new THREE.BufferGeometry()
+    const cablePts: Array<THREE.Vector3> = []
+    for (let i = 0; i <= 24; i++) {
+      const t = i / 24
+      const cx = this.mapDef.cableCarSpline.startX + (this.mapDef.cableCarSpline.endX - this.mapDef.cableCarSpline.startX) * t
+      const cy = this.mapDef.cableCarSpline.baseY + Math.sin(Math.PI * t) * this.mapDef.cableCarSpline.archY + 2.35
+      cablePts.push(new THREE.Vector3(cx, cy, this.mapDef.cableCarSpline.z))
+    }
+    cableGeo.setFromPoints(cablePts)
+    this.mapGeometry.add(
+      new THREE.Line(cableGeo, new THREE.LineBasicMaterial({ color: INKLINE_PALETTE.inkDark }))
+    )
+  }
+
+  private setMap(map: MapDef): void {
+    if (map.id === this.mapDef.id) return
+    this.resetMatchState()
+    this.setSketchPreview(null)
+    // Dispose map-owned textures too; shared toon gradients remain renderer-wide.
+    const textures = new Set<THREE.Texture>()
+    this.mapGeometry.traverse((obj) => {
+      if (obj instanceof THREE.Mesh || obj instanceof THREE.Line) {
+        const materials = Array.isArray(obj.material) ? obj.material : [obj.material]
+        for (const material of materials) {
+          const tex = (material as THREE.MeshBasicMaterial).map
+          if (tex) textures.add(tex)
+        }
+        if (obj instanceof THREE.InstancedMesh) obj.dispose()
+      }
+    })
+    for (const tex of textures) tex.dispose()
+    this.mapGeometry.traverse((obj) => {
+      if (obj instanceof THREE.Line && !(obj instanceof THREE.LineSegments)) {
+        obj.geometry.dispose()
+        if (Array.isArray(obj.material)) obj.material.forEach((m) => m.dispose())
+        else obj.material.dispose()
+      }
+    })
+    disposeObject3D(this.mapGeometry)
+    this.mapGeometry.clear()
+    this.muralMeshes.length = 0
+    this.mapDef = map
+    this.buildBellYardGeometry()
+    if (map.id === "bellYard") addYardDetails(this.mapGeometry)
+    else addOverprintDetails(this.mapGeometry, map)
+    this.buildMilestoneFixtures()
+    this.buildCableRail()
+    const a = map.anomalyCourtyard
+    this.anomalyBorder.geometry.dispose()
+    const outline = new THREE.BoxGeometry(a.maxX - a.minX, 0.3, a.maxZ - a.minZ)
+    this.anomalyBorder.geometry = new THREE.EdgesGeometry(outline)
+    outline.dispose()
+    this.anomalyBorder.position.set((a.minX + a.maxX) / 2, 0.18, (a.minZ + a.maxZ) / 2)
+    const vault = map.extractionVault
+    const exit = map.extractionExit
+    this.extractionMarkers.children[0]!.position.set(vault.x, vault.y + 0.08, vault.z)
+    this.extractionMarkers.children[1]!.position.set(exit.x, exit.y + 0.08, exit.z)
+    this.foundrySiegeGroup.children[0]!.position.set(map.foundryCenter.x, map.foundryCenter.y + 0.8, map.foundryCenter.z)
+    for (const meshes of [this.constructMeshes, this.propMeshes, this.scrapMeshes]) {
+      for (const mesh of meshes.values()) {
+        this.worldScene.remove(mesh)
+        disposeObject3D(mesh)
+      }
+      meshes.clear()
+    }
+    for (const fx of this.burstFx) {
+      this.worldScene.remove(fx.mesh)
+      disposeObject3D(fx.mesh)
+    }
+    this.burstFx.length = 0
+  }
+
   private buildMilestoneFixtures(): void {
     // Sketch anchor posts (distinct ink-blue brass eyelets at alley gap ends)
     const postMat = createInkMaterial(INKLINE_PALETTE.cobalt, { hatchStrength: 0.22 })
     const capMat = createInkMaterial(INKLINE_PALETTE.ochre, { hatchStrength: 0.2 })
-    for (const anchor of SKETCH_ANCHORS) {
+    for (const anchor of this.mapDef.sketchAnchors) {
       for (const [x, y, z] of [
         [anchor.ax, anchor.ay, anchor.az],
         [anchor.bx, anchor.by, anchor.bz]
@@ -346,19 +404,19 @@ export class BellYardScene {
         const post = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.62, 0.32), postMat)
         post.position.set(x, y + 0.31, z)
         addInkEdges(post, 22)
-        this.worldScene.add(post)
+        this.mapGeometry.add(post)
         const cap = new THREE.Mesh(new THREE.OctahedronGeometry(0.18, 0), capMat)
         cap.position.set(x, y + 0.76, z)
-        this.worldScene.add(cap)
+        this.mapGeometry.add(cap)
       }
     }
 
     // Marked grapple ledge brackets (aged brass rings along ledges)
     const hookMat = createInkMaterial(INKLINE_PALETTE.ochre, { hatchStrength: 0.2 })
-    for (const ledge of GRAPPLE_LEDGES) {
+    for (const ledge of this.mapDef.grappleLedges) {
       const ring = new THREE.Mesh(new THREE.TorusGeometry(0.28, 0.06, 6, 12), hookMat)
       ring.position.set(ledge.x, ledge.y, ledge.z)
-      this.worldScene.add(ring)
+      this.mapGeometry.add(ring)
     }
   }
 
@@ -431,7 +489,7 @@ export class BellYardScene {
       ochre: INKLINE_PALETTE.ochre
     }
 
-    for (const box of MAP_BOXES) {
+    for (const box of this.mapDef.boxes) {
       const sx = box.maxX - box.minX
       const sy = box.maxY - box.minY
       const sz = box.maxZ - box.minZ
@@ -457,7 +515,7 @@ export class BellYardScene {
         mesh.position.set(cx, box.minY + sy * 0.64, cz)
         mesh.castShadow = true
         addInkEdges(mesh, 26)
-        this.worldScene.add(mesh)
+        this.mapGeometry.add(mesh)
 
         // Conical cap + 4 legs
         const cap = new THREE.Mesh(
@@ -466,7 +524,7 @@ export class BellYardScene {
         )
         cap.position.set(cx, box.maxY + sy * 0.08, cz)
         addInkEdges(cap, 26)
-        this.worldScene.add(cap)
+        this.mapGeometry.add(cap)
 
         const legMat = createInkMaterial(0x404b46, { hatchStrength: 0.2 })
         for (const [lx, lz] of [
@@ -478,7 +536,7 @@ export class BellYardScene {
           const leg = new THREE.Mesh(new THREE.BoxGeometry(0.22, sy * 0.34, 0.22), legMat)
           leg.position.set(cx + lx, box.minY + sy * 0.17, cz + lz)
           addInkEdges(leg, 24)
-          this.worldScene.add(leg)
+          this.mapGeometry.add(leg)
         }
         continue
       }
@@ -490,7 +548,7 @@ export class BellYardScene {
         mesh.castShadow = true
         addInkEdges(mesh, 20)
       }
-      this.worldScene.add(mesh)
+      this.mapGeometry.add(mesh)
 
       // Architectural windows on printworks buildings
       if (box.kind === "building") {
@@ -504,14 +562,14 @@ export class BellYardScene {
           const win = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.82, sz + 0.06), winMat)
           win.position.set(wx, cy + 0.32, cz)
           addInkEdges(win, 24)
-          this.worldScene.add(win)
+          this.mapGeometry.add(win)
         }
         // Steel tram tracks embedded in Bell Yard south street
         const railMat = new THREE.MeshBasicMaterial({ color: INKLINE_PALETTE.inkDark })
         for (const rz of [18.5, 19.6]) {
           const rail = new THREE.Mesh(new THREE.BoxGeometry(52, 0.04, 0.09), railMat)
           rail.position.set(0, 0.02, rz)
-          this.worldScene.add(rail)
+          this.mapGeometry.add(rail)
         }
       }
 
@@ -547,15 +605,15 @@ export class BellYardScene {
           signMesh.position.set(box.minX - 0.14, signY, cz)
           signMesh.rotation.y = -Math.PI / 2
         }
-        this.worldScene.add(signMesh)
+        this.mapGeometry.add(signMesh)
       }
     }
 
     // Build the 3 Screen-Printed Mural Walls (Courtyard, Tram Shelter, Upper Loading Deck)
-    for (const z of MURAL_ZONES) {
+    for (const z of this.mapDef.muralZones) {
       const tex = createMuralTexture(z.shortName, "neutral")
       const mat = new THREE.MeshBasicMaterial({ map: tex })
-      const isTramMural = z.id === 1
+      const isTramMural = this.mapDef.id === "bellYard" && z.id === 1
       const mesh = new THREE.Mesh(
         new THREE.PlaneGeometry(isTramMural ? 4.4 : 5.6, isTramMural ? 1.75 : 2.2),
         mat
@@ -564,13 +622,13 @@ export class BellYardScene {
       if (z.wallFacing === "-z") mesh.rotation.y = Math.PI
       else if (z.wallFacing === "+x") mesh.rotation.y = Math.PI / 2
       else if (z.wallFacing === "-x") mesh.rotation.y = -Math.PI / 2
-      this.worldScene.add(mesh)
+      this.mapGeometry.add(mesh)
       this.muralMeshes.push({ mesh, owner: "neutral" })
     }
   }
 
   private addBuildingWindows(
-    box: (typeof MAP_BOXES)[number],
+    box: MapBox,
     cx: number,
     cz: number,
     sx: number,
@@ -595,7 +653,7 @@ export class BellYardScene {
           const pane = new THREE.Mesh(new THREE.BoxGeometry(1.5, 1.5, 0.08), winMat)
           pane.position.set(wx, wy, faceZ)
           addInkEdges(pane, 24)
-          this.worldScene.add(pane)
+          this.mapGeometry.add(pane)
         }
       }
     } else {
@@ -608,7 +666,7 @@ export class BellYardScene {
           const pane = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.5, 1.5), winMat)
           pane.position.set(faceX, wy, wz)
           addInkEdges(pane, 24)
-          this.worldScene.add(pane)
+          this.mapGeometry.add(pane)
         }
       }
     }
@@ -748,7 +806,7 @@ export class BellYardScene {
     }
 
     const speedMult = ARMORS[localFighter.armorType].speedMultiplier
-    const extraSolids = snapshot ? buildDynamicSolids(snapshot.constructs, snapshot.cableCar) : []
+    const extraSolids = snapshot ? buildDynamicSolids(snapshot.constructs, snapshot.cableCar, MAPS[snapshot.mapId]) : []
     this.predictedKin = stepPlayerMovement(
       this.predictedKin,
       {
@@ -759,7 +817,7 @@ export class BellYardScene {
       },
       speedMult,
       1 / TICK_HZ,
-      { extraSolids, anomalyActive: snapshot?.anomalyActive ?? false }
+      { map: snapshot ? MAPS[snapshot.mapId] : this.mapDef, extraSolids, anomalyActive: snapshot?.anomalyActive ?? false }
     )
     this.pendingInputs.push(input)
     if (this.pendingInputs.length > 90) {
@@ -769,6 +827,7 @@ export class BellYardScene {
 
   /** Reconcile local predicted kinematics when an authoritative server snapshot arrives */
   public reconcileSnapshot(snapshot: MatchSnapshot, localSlotId: number, isOnline: boolean): void {
+    this.setMap(MAPS[snapshot.mapId])
     const local = snapshot.fighters.find((f) => f.slotId === localSlotId)
     if (!local || !local.alive) {
       this.predictedKin = null
@@ -795,7 +854,7 @@ export class BellYardScene {
       grounded: local.grounded
     }
     const speedMult = ARMORS[local.armorType].speedMultiplier
-    const extraSolids = buildDynamicSolids(snapshot.constructs, snapshot.cableCar)
+    const extraSolids = buildDynamicSolids(snapshot.constructs, snapshot.cableCar, MAPS[snapshot.mapId])
     for (const inp of this.pendingInputs) {
       state = stepPlayerMovement(
         state,
@@ -807,7 +866,7 @@ export class BellYardScene {
         },
         speedMult,
         1 / TICK_HZ,
-        { extraSolids, anomalyActive: snapshot.anomalyActive }
+        { map: MAPS[snapshot.mapId], extraSolids, anomalyActive: snapshot.anomalyActive }
       )
     }
 
@@ -859,12 +918,14 @@ export class BellYardScene {
     this.lastRenderMs = now
 
     if (snapshot) {
+      this.setMap(MAPS[snapshot.mapId])
       this.processEvents(snapshot, localSlotId)
       this.syncActiveMural(snapshot, now)
       this.syncMilestoneActors(snapshot, localSlotId, now)
       this.syncFighters(snapshot, localSlotId, localYaw, localPitch, dt)
       this.syncProjectiles(snapshot)
     } else {
+      this.setMap(MAPS.bellYard)
       // Title-screen atmospheric courtyard overview orbit
       const t = now * 0.00018
       this.camera.position.set(Math.sin(t) * 18, 9.2, Math.cos(t) * 17)
@@ -1136,7 +1197,7 @@ export class BellYardScene {
 
   private syncActiveMural(snapshot: MatchSnapshot, nowMs: number): void {
     this.zoneRing.visible = snapshot.mode === "mural"
-    const zone = MURAL_ZONES[snapshot.activeMuralId]!
+    const zone = this.mapDef.muralZones[snapshot.activeMuralId]!
     this.zoneRing.position.set(zone.x, zone.y, zone.z)
     this.zoneRing.rotation.y = nowMs * 0.0005
 

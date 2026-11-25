@@ -27,7 +27,6 @@ import {
   DIFFICULTY_MAX,
   DIFFICULTY_MIN,
   HEALTH_PICKUP_FIRST_SPAWN_TICKS,
-  HEALTH_PICKUP_POS,
   botCosmetics,
   HEAD_BYPASSES_ARMOR,
   HEAD_MIN_Y,
@@ -72,22 +71,12 @@ import {
   type PrimaryGunId
 } from "./data.ts"
 import {
-  BARREL_SPAWNS,
-  CABLE_CAR_SPLINE,
-  EXTRACTION_EXIT,
-  EXTRACTION_VAULT,
-  FOUNDRY_CENTER,
-  FOUNDRY_SCRAP_SPAWNS,
-  GRAPPLE_LEDGES,
-  MAP_WAYPOINTS,
-  MURAL_ZONES,
-  SKETCH_ANCHORS,
-  SPAWN_POINTS,
   findNearestWaypoint,
   muralWaypointId,
   nextWaypointToward,
   type MapBox
 } from "./map.ts"
+import { MAPS, sanitizeMapId, type MapDef, type MapId } from "./maps.ts"
 import {
   hasLineOfSight,
   stepPlayerMovement,
@@ -129,26 +118,26 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
 }
 
-function getSpawnForSlot(slotId: number, totalSlots: number) {
+export function getSpawnForSlot(slotId: number, totalSlots: number, map = MAPS.bellYard) {
   const half = Math.max(1, Math.ceil(totalSlots / 2))
   const crew: CrewId = slotId < half ? 0 : 1
   const localIdx = crew === 0 ? slotId : slotId - half
-  const pool = SPAWN_POINTS.filter((s) => s.crew === crew)
+  const pool = map.spawnPoints.filter((s) => s.crew === crew)
   const base = pool[localIdx % pool.length]!
   // Slight offset when testing 12 or 20 bots so spawns never stack identically
   const ring = Math.floor(localIdx / pool.length)
   return {
     ...base,
-    x: base.x + (crew === 0 ? ring * 1.1 : -ring * 1.1),
+    x: base.x + (crew === 0 ? 1 : -1) * (map.id === "bellYard" ? ring * 1.1 : Math.min(ring, 1) * 0.8),
     z: base.z + (ring % 2 === 0 ? ring * 0.6 : -ring * 0.6)
   }
 }
 
-function initialCableCar(): CableCarData {
+function initialCableCar(map: MapDef): CableCarData {
   return {
-    x: CABLE_CAR_SPLINE.startX,
-    y: CABLE_CAR_SPLINE.baseY,
-    z: CABLE_CAR_SPLINE.z,
+    x: map.cableCarSpline.startX,
+    y: map.cableCarSpline.baseY,
+    z: map.cableCarSpline.z,
     vx: 0,
     vy: 0,
     vz: 0,
@@ -157,8 +146,8 @@ function initialCableCar(): CableCarData {
   }
 }
 
-function initialProps(): ReadonlyArray<MovablePropData> {
-  return BARREL_SPAWNS.map((b) => ({
+function initialProps(map: MapDef): ReadonlyArray<MovablePropData> {
+  return map.barrelSpawns.map((b) => ({
     id: b.id,
     x: b.x,
     y: b.y,
@@ -172,12 +161,12 @@ function initialProps(): ReadonlyArray<MovablePropData> {
   }))
 }
 
-function initialForeman(mode: GameModeId): ForemanData | null {
+function initialForeman(mode: GameModeId, map: MapDef): ForemanData | null {
   if (mode !== "eliteDuel") return null
   return {
-    x: 0,
-    y: 0,
-    z: -3.2,
+    x: map.id === "bellYard" ? 0 : map.bossEntrance.x,
+    y: map.id === "bellYard" ? 0 : map.bossEntrance.y,
+    z: map.id === "bellYard" ? -3.2 : map.bossEntrance.z,
     yaw: 0,
     hp: 520,
     maxHp: 520,
@@ -203,10 +192,10 @@ function initialExtraction(mode: GameModeId, equipmentStaked: boolean): Extracti
   }
 }
 
-function initialFoundry(mode: GameModeId): FoundryData | null {
+function initialFoundry(mode: GameModeId, map: MapDef): FoundryData | null {
   if (mode !== "foundry") return null
   return {
-    piles: FOUNDRY_SCRAP_SPAWNS.map((p) => ({
+    piles: map.foundryScrapSpawns.map((p) => ({
       id: p.id,
       x: p.x,
       y: p.y,
@@ -223,7 +212,8 @@ function initialFoundry(mode: GameModeId): FoundryData | null {
 
 export function buildDynamicSolids(
   constructs: ReadonlyArray<ConstructData>,
-  cableCar: CableCarData
+  cableCar: CableCarData,
+  map = MAPS.bellYard
 ): Array<MapBox> {
   const boxes: Array<MapBox> = []
   for (const c of constructs) {
@@ -241,12 +231,12 @@ export function buildDynamicSolids(
   }
   boxes.push({
     id: "cable_car_deck",
-    minX: cableCar.x - CABLE_CAR_SPLINE.halfW,
-    maxX: cableCar.x + CABLE_CAR_SPLINE.halfW,
-    minY: cableCar.y - CABLE_CAR_SPLINE.thickness,
+    minX: cableCar.x - map.cableCarSpline.halfW,
+    maxX: cableCar.x + map.cableCarSpline.halfW,
+    minY: cableCar.y - map.cableCarSpline.thickness,
     maxY: cableCar.y,
-    minZ: cableCar.z - CABLE_CAR_SPLINE.halfD,
-    maxZ: cableCar.z + CABLE_CAR_SPLINE.halfD,
+    minZ: cableCar.z - map.cableCarSpline.halfD,
+    maxZ: cableCar.z + map.cableCarSpline.halfD,
     kind: "bridge",
     solid: true
   })
@@ -260,14 +250,19 @@ export function makeDefaultMatchState(
     readonly anomalyEnabled?: boolean
     readonly totalSlots?: number
     readonly equipmentStaked?: boolean
+    readonly mapId?: MapId
     readonly difficulty?: number
   } = {}
 ): MatchStateData {
+  const mapId = sanitizeMapId(options.mapId)
+  const map = MAPS[mapId]
   const mode = options.mode ?? "mural"
   const totalSlots = clamp(options.totalSlots ?? SLOTS_COUNT, 2, 21)
   const anomalyEnabled = options.anomalyEnabled ?? false
   const equipmentStaked = options.equipmentStaked ?? false
   return {
+    mapId,
+    pendingMapId: null,
     mode,
     totalSlots,
     anomalyEnabled,
@@ -289,15 +284,15 @@ export function makeDefaultMatchState(
     nextSmokeId: 1,
     constructs: [],
     smokeClouds: [],
-    props: initialProps(),
-    cableCar: initialCableCar(),
-    foreman: initialForeman(mode),
+    props: initialProps(map),
+    cableCar: initialCableCar(map),
+    foreman: initialForeman(mode, map),
     extraction: initialExtraction(mode, equipmentStaked),
-    foundry: initialFoundry(mode),
+    foundry: initialFoundry(mode, map),
     healthPickup: {
-      x: HEALTH_PICKUP_POS.x,
-      y: HEALTH_PICKUP_POS.y,
-      z: HEALTH_PICKUP_POS.z,
+      x: map.healthPickupPosition.x,
+      y: map.healthPickupPosition.y,
+      z: map.healthPickupPosition.z,
       available: false,
       respawnTicksLeft: HEALTH_PICKUP_FIRST_SPAWN_TICKS
     },
@@ -318,11 +313,12 @@ export function makeDefaultMatchState(
 function makeFighterForSlot(
   slotId: number,
   totalSlots: number,
-  humanSpec: InitialHumanSpec | undefined
+  humanSpec: InitialHumanSpec | undefined,
+  map: MapDef
 ): FighterData {
   const half = Math.max(1, Math.ceil(totalSlots / 2))
   const crew: CrewId = slotId < half ? 0 : 1
-  const spawn = getSpawnForSlot(slotId, totalSlots)
+  const spawn = getSpawnForSlot(slotId, totalSlots, map)
   const isHuman = humanSpec !== undefined
   const loadout = isHuman
     ? sanitizeLoadout(humanSpec.loadout)
@@ -413,9 +409,9 @@ function pushEvent(
   return nextSeq + 1
 }
 
-function isInsideMuralZone(f: FighterData, muralId: 0 | 1 | 2): boolean {
+function isInsideMuralZone(f: FighterData, muralId: 0 | 1 | 2, map: MapDef): boolean {
   if (!f.alive) return false
-  const zone = MURAL_ZONES[muralId]!
+  const zone = map.muralZones[muralId]!
   const dx = f.x - zone.x
   const dz = f.z - zone.z
   if (dx * dx + dz * dz > zone.radius * zone.radius) return false
@@ -434,8 +430,8 @@ function distPointToBox(
   return Ops.hypot(Ops.hypot(px - cx, pz - cz), py - cy)
 }
 
-function stepCableCar(prev: CableCarData): CableCarData {
-  const stepT = 1 / CABLE_CAR_SPLINE.cycleTicks
+function stepCableCar(prev: CableCarData, map: MapDef): CableCarData {
+  const stepT = 1 / map.cableCarSpline.cycleTicks
   let nextT = prev.t + prev.dir * stepT
   let nextDir = prev.dir
   if (nextT >= 1) {
@@ -446,9 +442,9 @@ function stepCableCar(prev: CableCarData): CableCarData {
     nextDir = 1
   }
   const nx =
-    CABLE_CAR_SPLINE.startX + (CABLE_CAR_SPLINE.endX - CABLE_CAR_SPLINE.startX) * nextT
-  const ny = CABLE_CAR_SPLINE.baseY + Ops.sin(Math.PI * nextT) * CABLE_CAR_SPLINE.archY
-  const nz = CABLE_CAR_SPLINE.z
+    map.cableCarSpline.startX + (map.cableCarSpline.endX - map.cableCarSpline.startX) * nextT
+  const ny = map.cableCarSpline.baseY + Ops.sin(Math.PI * nextT) * map.cableCarSpline.archY
+  const nz = map.cableCarSpline.z
   return {
     x: nx,
     y: ny,
@@ -581,6 +577,8 @@ export const BootstrapMatch = Game.System(
       commands.despawn(entity)
     }
 
+    const mapId = prev.pendingMapId ?? prev.mapId
+    const map = MAPS[mapId]
     const mode = prev.pendingMode ?? prev.mode
     const anomalyEnabled = prev.pendingAnomalyEnabled ?? prev.anomalyEnabled
     const totalSlots =
@@ -608,11 +606,11 @@ export const BootstrapMatch = Game.System(
     }
 
     for (let slotId = 0; slotId < totalSlots; slotId++) {
-      let fighter = makeFighterForSlot(slotId, totalSlots, humansBySlot.get(slotId))
+      let fighter = makeFighterForSlot(slotId, totalSlots, humansBySlot.get(slotId), map)
       // In Elite Duel, slot 0 is the player; slot 1 is a distant ally spectator/helper
-      if (mode === "eliteDuel" && slotId === 0) {
+      if (mapId === "bellYard" && mode === "eliteDuel" && slotId === 0) {
         fighter = { ...fighter, x: 0, y: 0, z: 7.5, yaw: 0 }
-      } else if (mode === "extraction" && slotId === 0) {
+      } else if (mapId === "bellYard" && mode === "extraction" && slotId === 0) {
         fighter = { ...fighter, x: -13.0, y: 0, z: 9.5, yaw: 0 }
       }
       commands.spawn(Game.Command.spawn([Fighter, fighter]))
@@ -624,6 +622,7 @@ export const BootstrapMatch = Game.System(
         anomalyEnabled,
         totalSlots,
         equipmentStaked: prev.pendingEquipmentStake,
+        mapId,
         difficulty: prev.pendingDifficulty ?? prev.difficulty
       }),
       nextEventSeq: prev.nextEventSeq
@@ -792,6 +791,7 @@ export const HandleIntents = Game.System(
             pendingAnomalyEnabled: intent.anomalyEnabled ?? match.anomalyEnabled,
             pendingTotalSlots: intent.totalSlots ?? match.totalSlots,
             pendingEquipmentStake: intent.equipmentStaked ?? false,
+            pendingMapId: intent.mapId === undefined ? match.mapId : sanitizeMapId(intent.mapId),
             pendingDifficulty: intent.difficulty ?? null
           }
           const cur = machines.phase.get()._tag
@@ -827,6 +827,7 @@ export const RunBotAI = Game.System(
   },
   ({ queries, resources }) => {
     const match = resources.match.get()
+    const map = MAPS[match.mapId]
     if (match.paused) return
 
     const random = Random.draw(resources.rng)
@@ -838,19 +839,19 @@ export const RunBotAI = Game.System(
     fighters.sort((a, b) => a.data.slotId - b.data.slotId)
 
     const bySlot: Record<number, PlayerInput> = { ...resources.inputs.get().bySlot }
-    const dynamicSolids = buildDynamicSolids(match.constructs, match.cableCar)
+    const dynamicSolids = buildDynamicSolids(match.constructs, match.cableCar, map)
 
     // Dynamic waypoint links unlocked by active Sketch Planks!
     const dynamicEdges: Array<readonly [number, number]> = []
     for (const c of match.constructs) {
       if (c.kind === "plank" && c.anchorId) {
-        const anchor = SKETCH_ANCHORS.find((a) => a.id === c.anchorId)
+        const anchor = map.sketchAnchors.find((a) => a.id === c.anchorId)
         if (anchor) dynamicEdges.push([anchor.wpA, anchor.wpB])
       }
     }
 
-    const defaultGoalWpId = muralWaypointId(match.activeMuralId)
-    const activeZone = MURAL_ZONES[match.activeMuralId]!
+    const defaultGoalWpId = muralWaypointId(match.activeMuralId, map.waypoints)
+    const activeZone = map.muralZones[match.activeMuralId]!
     const pickupLive = match.healthPickup.available
 
     for (const entry of fighters) {
@@ -896,7 +897,8 @@ export const RunBotAI = Game.System(
               other.y + 1.15,
               other.z,
               dynamicSolids,
-              match.smokeClouds
+              match.smokeClouds,
+              map
             )
           ) {
             bestTargetDist = dist
@@ -908,13 +910,16 @@ export const RunBotAI = Game.System(
       // 2. Mode-aware objective waypoint (Mural / Extraction guard / Foundry scrap & deposit)
       let goalWpId = defaultGoalWpId
       if (match.mode === "extraction") {
-        goalWpId = match.extraction?.vaultUnlocked ? 20 : 12
+        goalWpId = match.extraction?.vaultUnlocked
+          ? (map.id === "bellYard" ? 20 : findNearestWaypoint(map.extractionExit.x, map.extractionExit.y, map.extractionExit.z, map.waypoints))
+          : (map.id === "bellYard" ? 12 : findNearestWaypoint(map.extractionVault.x, map.extractionVault.y, map.extractionVault.z, map.waypoints))
       } else if (match.mode === "foundry" && match.foundry) {
         if (bot.carryingScrap > 0) {
-          goalWpId = 7 // Central Foundry Press
+          goalWpId = findNearestWaypoint(map.foundryCenter.x, map.foundryCenter.y, map.foundryCenter.z, map.waypoints)
         } else {
           const openPile = match.foundry.piles.find((p) => p.available)
-          goalWpId = openPile ? findNearestWaypoint(openPile.x, openPile.y, openPile.z) : 7
+          goalWpId = openPile ? findNearestWaypoint(openPile.x, openPile.y, openPile.z, map.waypoints)
+            : findNearestWaypoint(map.foundryCenter.x, map.foundryCenter.y, map.foundryCenter.z, map.waypoints)
         }
       }
 
@@ -927,17 +932,17 @@ export const RunBotAI = Game.System(
           const d = Ops.hypot(other.x - bot.x, other.z - bot.z)
           if (d < huntDist) {
             huntDist = d
-            goalWpId = findNearestWaypoint(other.x, other.y, other.z)
+            goalWpId = findNearestWaypoint(other.x, other.y, other.z, map.waypoints)
           }
         }
       } else if (pickupLive && bot.hp < BOT_SEEK_HEALTH_HP) {
-        goalWpId = findNearestWaypoint(match.healthPickup.x, match.healthPickup.y, match.healthPickup.z)
+        goalWpId = findNearestWaypoint(match.healthPickup.x, match.healthPickup.y, match.healthPickup.z, map.waypoints)
       }
 
-      const curWpId = findNearestWaypoint(bot.x, bot.y, bot.z)
-      const nextWpId = nextWaypointToward(curWpId, goalWpId, dynamicEdges)
-      const nextWp = MAP_WAYPOINTS[nextWpId]!
-      const insideZone = match.mode === "mural" && isInsideMuralZone(bot, match.activeMuralId)
+      const curWpId = findNearestWaypoint(bot.x, bot.y, bot.z, map.waypoints)
+      const nextWpId = nextWaypointToward(curWpId, goalWpId, dynamicEdges, map.waypoints)
+      const nextWp = map.waypoints[nextWpId]!
+      const insideZone = match.mode === "mural" && isInsideMuralZone(bot, match.activeMuralId, map)
 
       let navX = nextWp.x
       let navZ = nextWp.z
@@ -1049,6 +1054,7 @@ export const StepCombatAndMatch = Game.System(
   },
   ({ queries, resources, nextMachines, commands }) => {
     const matchPrev = resources.match.get()
+    const map = MAPS[matchPrev.mapId]
     if (matchPrev.paused) return
 
     const nextTick = matchPrev.tickCount + 1
@@ -1073,7 +1079,7 @@ export const StepCombatAndMatch = Game.System(
 
     // 0. Step Overhead Cable Car, Anomaly Cycle, Construct Expiry, Smoke Decay & Props
     const prevCar = matchPrev.cableCar
-    const cableCar = stepCableCar(prevCar)
+    const cableCar = stepCableCar(prevCar, map)
 
     let anomalyActive = matchPrev.anomalyActive
     let anomalyTicksLeft = matchPrev.anomalyTicksLeft
@@ -1143,7 +1149,7 @@ export const StepCombatAndMatch = Game.System(
       if (p.exploded) {
         const left = p.respawnTicksLeft - 1
         if (left <= 0) {
-          const spawn = BARREL_SPAWNS.find((b) => b.id === p.id) ?? { id: p.id, x: 0, y: 0, z: 2 }
+          const spawn = map.barrelSpawns.find((b) => b.id === p.id) ?? { id: p.id, x: 0, y: 0, z: 2 }
           return {
             id: p.id,
             x: spawn.x,
@@ -1160,9 +1166,9 @@ export const StepCombatAndMatch = Game.System(
         return { ...p, respawnTicksLeft: left }
       }
       if (Math.abs(p.vx) > 0.05 || Math.abs(p.vz) > 0.05) {
-        const nx = clamp(p.x + p.vx * DT, -25.5, 25.5)
-        const nz = clamp(p.z + p.vz * DT, -16.0, 19.5)
-        const blocked = sweepSegmentVsWorld(p.x, p.y + 0.5, p.z, nx, p.y + 0.5, nz, 0.45)
+        const nx = clamp(p.x + p.vx * DT, map.propBounds.minX, map.propBounds.maxX)
+        const nz = clamp(p.z + p.vz * DT, map.propBounds.minZ, map.propBounds.maxZ)
+        const blocked = sweepSegmentVsWorld(p.x, p.y + 0.5, p.z, nx, p.y + 0.5, nz, 0.45, [], map)
         if (blocked) {
           return { ...p, vx: 0, vz: 0 }
         }
@@ -1187,7 +1193,7 @@ export const StepCombatAndMatch = Game.System(
         const act = input.sketchAction
         let created: ConstructData | null = null
         if (act.kind === "placeAnchor") {
-          const anchor = SKETCH_ANCHORS.find((a) => a.id === act.anchorId)
+          const anchor = map.sketchAnchors.find((a) => a.id === act.anchorId)
           const alreadyOccupied =
             anchor !== undefined && constructs.some((c) => c.anchorId === anchor.id)
           if (anchor && !alreadyOccupied) {
@@ -1214,8 +1220,8 @@ export const StepCombatAndMatch = Game.System(
         } else if (act.kind === "placeFree") {
           const sinY = Ops.sin(input.yaw)
           const cosY = Ops.cos(input.yaw)
-          const cx = clamp(f.x - sinY * 2.8, -24, 24)
-          const cz = clamp(f.z - cosY * 2.8, -15.5, 18.5)
+          const cx = clamp(f.x - sinY * 2.8, map.placementBounds.minX, map.placementBounds.maxX)
+          const cz = clamp(f.z - cosY * 2.8, map.placementBounds.minZ, map.placementBounds.maxZ)
           const topY = f.y
           if (Ops.hypot(cx - f.x, cz - f.z) <= SKETCH_FREE_RANGE) {
             const overlaps = constructs.some(
@@ -1247,8 +1253,8 @@ export const StepCombatAndMatch = Game.System(
         } else if (act.kind === "placeBarricade") {
           const sinY = Ops.sin(input.yaw)
           const cosY = Ops.cos(input.yaw)
-          const cx = clamp(f.x - sinY * 2.1, -24, 24)
-          const cz = clamp(f.z - cosY * 2.1, -15.5, 18.5)
+          const cx = clamp(f.x - sinY * 2.1, map.placementBounds.minX, map.placementBounds.maxX)
+          const cz = clamp(f.z - cosY * 2.1, map.placementBounds.minZ, map.placementBounds.maxZ)
           const wideAlongX = Math.abs(cosY) >= Math.abs(sinY)
           const halfX = wideAlongX ? 1.15 : 0.22
           const halfZ = wideAlongX ? 0.22 : 1.15
@@ -1349,8 +1355,8 @@ export const StepCombatAndMatch = Game.System(
       ) {
         const sinY = Ops.sin(input.yaw)
         const cosY = Ops.cos(input.yaw)
-        const targetX = clamp(f.x - sinY * 5.0, -24, 24)
-        const targetZ = clamp(f.z - cosY * 5.0, -15, 18)
+        const targetX = clamp(f.x - sinY * 5.0, map.smokeBounds.minX, map.smokeBounds.maxX)
+        const targetZ = clamp(f.z - cosY * 5.0, map.smokeBounds.minZ, map.smokeBounds.maxZ)
         const wall = sweepSegmentVsWorld(
           f.x,
           f.y + PLAYER_EYE_HEIGHT,
@@ -1358,7 +1364,8 @@ export const StepCombatAndMatch = Game.System(
           targetX,
           f.y + 1.4,
           targetZ,
-          0.35
+          0.35,
+          [], map
         )
         const frac = wall ? Math.max(0.2, wall.t - 0.1) : 1
         const cx = f.x + (targetX - f.x) * frac
@@ -1423,14 +1430,14 @@ export const StepCombatAndMatch = Game.System(
         let bestDot = 0.86
         let chosen: FighterData["grapple"] = null
 
-        for (const ledge of GRAPPLE_LEDGES) {
+        for (const ledge of map.grappleLedges) {
           const dx = ledge.x - f.x
           const dy = ledge.y - eyeY
           const dz = ledge.z - f.z
           const dist = Ops.hypot(Ops.hypot(dx, dz), dy)
           if (dist < 1.5 || dist > GRAPPLE_RANGE) continue
           const dot = (dx * aimX + dy * aimY + dz * aimZ) / dist
-          if (dot > bestDot && hasLineOfSight(f.x, eyeY, f.z, ledge.x, ledge.y, ledge.z)) {
+          if (dot > bestDot && hasLineOfSight(f.x, eyeY, f.z, ledge.x, ledge.y, ledge.z, [], [], map)) {
             bestDot = dot
             chosen = {
               kind: "ledge",
@@ -1451,7 +1458,7 @@ export const StepCombatAndMatch = Game.System(
           const dist = Ops.hypot(Ops.hypot(dx, dz), dy)
           if (dist < 1.8 || dist > GRAPPLE_RANGE) continue
           const dot = (dx * aimX + dy * aimY + dz * aimZ) / dist
-          if (dot > bestDot && hasLineOfSight(f.x, eyeY, f.z, prop.x, prop.y + 0.55, prop.z)) {
+          if (dot > bestDot && hasLineOfSight(f.x, eyeY, f.z, prop.x, prop.y + 0.55, prop.z, [], [], map)) {
             bestDot = dot
             chosen = {
               kind: "prop",
@@ -1473,7 +1480,7 @@ export const StepCombatAndMatch = Game.System(
           const dist = Ops.hypot(Ops.hypot(dx, dz), dy)
           if (dist < 2.2 || dist > GRAPPLE_RANGE) continue
           const dot = (dx * aimX + dy * aimY + dz * aimZ) / dist
-          if (dot > bestDot && hasLineOfSight(f.x, eyeY, f.z, o.x, o.y + 1.0, o.z)) {
+          if (dot > bestDot && hasLineOfSight(f.x, eyeY, f.z, o.x, o.y + 1.0, o.z, [], [], map)) {
             bestDot = dot
             chosen = {
               kind: "bot",
@@ -1504,7 +1511,7 @@ export const StepCombatAndMatch = Game.System(
       }
     }
 
-    const dynamicSolids = buildDynamicSolids(constructs, cableCar)
+    const dynamicSolids = buildDynamicSolids(constructs, cableCar, map)
 
     // 1b. The boss enters: the lowest red bot is promoted once per match
     if (nextTick === BOSS_SPAWN_TICK && bossSlot < 0 && BOSS_MODES.includes(matchPrev.mode)) {
@@ -1570,7 +1577,7 @@ export const StepCombatAndMatch = Game.System(
       if (!f.alive) {
         const nextRespawn = f.respawnTicksLeft - 1
         if (nextRespawn <= 0) {
-          const spawn = getSpawnForSlot(f.slotId, matchPrev.totalSlots)
+          const spawn = getSpawnForSlot(f.slotId, matchPrev.totalSlots, map)
           const promotedHuman = f.pendingHumanId !== null
           const primaryGun: PrimaryGunId = promotedHuman
             ? (f.pendingLoadout?.primary ?? f.nextPrimaryGun)
@@ -1670,8 +1677,8 @@ export const StepCombatAndMatch = Game.System(
       let startZ = f.z
       const onCableCar =
         f.grounded &&
-        Math.abs(f.x - prevCar.x) <= CABLE_CAR_SPLINE.halfW + PLAYER_RADIUS &&
-        Math.abs(f.z - prevCar.z) <= CABLE_CAR_SPLINE.halfD + PLAYER_RADIUS &&
+        Math.abs(f.x - prevCar.x) <= map.cableCarSpline.halfW + PLAYER_RADIUS &&
+        Math.abs(f.z - prevCar.z) <= map.cableCarSpline.halfD + PLAYER_RADIUS &&
         Math.abs(f.y - prevCar.y) <= 0.22
       if (onCableCar) {
         startX += cableCar.x - prevCar.x
@@ -1724,7 +1731,8 @@ export const StepCombatAndMatch = Game.System(
             ny + 0.9,
             nz,
             PLAYER_RADIUS,
-            dynamicSolids
+            dynamicSolids,
+            map
           )
           if (blocked) {
             kin = { x: startX, y: startY, z: startZ, vx: 0, vy: 0, vz: 0, grounded: false }
@@ -1771,7 +1779,7 @@ export const StepCombatAndMatch = Game.System(
             } else {
               const pullX = t.x + (dx / d) * 11 * DT
               const pullZ = t.z + (dz / d) * 11 * DT
-              const wall = sweepSegmentVsWorld(t.x, t.y + 0.9, t.z, pullX, t.y + 0.9, pullZ, PLAYER_RADIUS)
+              const wall = sweepSegmentVsWorld(t.x, t.y + 0.9, t.z, pullX, t.y + 0.9, pullZ, PLAYER_RADIUS, [], map)
               if (!wall) {
                 tEntry.data = { ...t, x: pullX, z: pullZ }
               }
@@ -1801,7 +1809,7 @@ export const StepCombatAndMatch = Game.System(
           },
           speedMult,
           DT,
-          { extraSolids: dynamicSolids, anomalyActive }
+          { map, extraSolids: dynamicSolids, anomalyActive }
         )
       }
 
@@ -2062,7 +2070,8 @@ export const StepCombatAndMatch = Game.System(
         ny,
         nz,
         proj.radius * 0.5,
-        dynamicSolids
+        dynamicSolids,
+        map
       )
       let bestT = worldHit !== null ? worldHit.t : 2
       let hitKind: "none" | "fighter" | "prop" | "foreman" = "none"
@@ -2332,7 +2341,7 @@ export const StepCombatAndMatch = Game.System(
       let cobaltInZone = false
       let vermilionInZone = false
       for (const entry of fighterEntries) {
-        if (isInsideMuralZone(entry.data, activeMuralId)) {
+        if (isInsideMuralZone(entry.data, activeMuralId, map)) {
           if (entry.data.crew === 0) cobaltInZone = true
           else vermilionInZone = true
         }
@@ -2359,7 +2368,7 @@ export const StepCombatAndMatch = Game.System(
       if (muralRotateTicksLeft <= 0) {
         activeMuralId = ((activeMuralId + 1) % 3) as 0 | 1 | 2
         muralRotateTicksLeft = MURAL_ROTATE_TICKS
-        const nextZone = MURAL_ZONES[activeMuralId]!
+        const nextZone = map.muralZones[activeMuralId]!
         nextEventSeq = pushEvent(feedItems, nextEventSeq, {
           kind: "muralRotate",
           shotEventId: 0,
@@ -2397,8 +2406,12 @@ export const StepCombatAndMatch = Game.System(
         if (fState === "patrol") {
           fyaw = Ops.atan2(-dx, -dz)
           if (dist > 2.6) {
-            fx = clamp(fx + (dx / dist) * 3.1 * DT, -10, 10)
-            fz = clamp(fz + (dz / dist) * 3.1 * DT, -8, 8)
+            fx = clamp(fx + (dx / dist) * 3.1 * DT, map.foremanBounds.minX, map.foremanBounds.maxX)
+            fz = clamp(fz + (dz / dist) * 3.1 * DT, map.foremanBounds.minZ, map.foremanBounds.maxZ)
+            if (map.id === "overprintHall" && sweepSegmentVsWorld(foreman.x, foreman.y + 0.9, foreman.z, fx, foreman.y + 0.9, fz, 0.55, [], map)) {
+              fx = foreman.x
+              fz = foreman.z
+            }
           }
           if (dist <= 3.8 && ticksLeft <= 0) {
             fState = "windup"
@@ -2449,10 +2462,10 @@ export const StepCombatAndMatch = Game.System(
           finishNow = true
         } else if (!extraction.vaultUnlocked) {
           const distV = Ops.hypot(
-            Ops.hypot(p.x - EXTRACTION_VAULT.x, p.z - EXTRACTION_VAULT.z),
-            p.y - EXTRACTION_VAULT.y
+            Ops.hypot(p.x - map.extractionVault.x, p.z - map.extractionVault.z),
+            p.y - map.extractionVault.y
           )
-          if (distV <= EXTRACTION_VAULT.radius) {
+          if (distV <= map.extractionVault.radius) {
             const prog = extraction.vaultProgressTicks + 1
             if (prog >= extraction.vaultTargetTicks) {
               extraction = {
@@ -2470,8 +2483,8 @@ export const StepCombatAndMatch = Game.System(
           }
         } else {
           // Escort/carry proof parcel to Tram Extraction Exit!
-          const distExit = Ops.hypot(p.x - EXTRACTION_EXIT.x, p.z - EXTRACTION_EXIT.z)
-          if (distExit <= EXTRACTION_EXIT.radius && p.y < 1.2) {
+          const distExit = Ops.hypot(p.x - map.extractionExit.x, p.z - map.extractionExit.z)
+          if (distExit <= map.extractionExit.radius && p.y < 1.2) {
             extraction = {
               ...extraction,
               extracted: true,
@@ -2519,8 +2532,8 @@ export const StepCombatAndMatch = Game.System(
       for (let i = 0; i < fighterEntries.length; i++) {
         const f = fighterEntries[i]!.data
         if (!f.alive) continue
-        const d = Ops.hypot(f.x - FOUNDRY_CENTER.x, f.z - FOUNDRY_CENTER.z)
-        if (d <= FOUNDRY_CENTER.radius && f.y < 2.2) {
+        const d = Ops.hypot(f.x - map.foundryCenter.x, f.z - map.foundryCenter.z)
+        if (d <= map.foundryCenter.radius && f.y < 2.2) {
           if (f.crew === 0) {
             cPresent = true
             if (f.carryingScrap > 0 && cCarrier < 0) cCarrier = i
@@ -2548,9 +2561,9 @@ export const StepCombatAndMatch = Game.System(
             actorSlot: f.slotId,
             targetSlot: 0,
             gunId: null,
-            x: FOUNDRY_CENTER.x,
+            x: map.foundryCenter.x,
             y: 1,
-            z: FOUNDRY_CENTER.z,
+            z: map.foundryCenter.z,
             damage: dep0
           })
         } else if (vCarrier >= 0 && nextTick % 30 === 0) {
@@ -2564,9 +2577,9 @@ export const StepCombatAndMatch = Game.System(
             actorSlot: f.slotId,
             targetSlot: 1,
             gunId: null,
-            x: FOUNDRY_CENTER.x,
+            x: map.foundryCenter.x,
             y: 1,
-            z: FOUNDRY_CENTER.z,
+            z: map.foundryCenter.z,
             damage: dep1
           })
         }

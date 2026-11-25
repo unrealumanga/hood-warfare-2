@@ -1,3 +1,4 @@
+import type { MapId } from "../sim/maps.ts"
 import type { CombatLoadout, CosmeticLoadout, MatchSnapshot, PlayerInput } from "../sim/index.ts"
 import type { ClientMessage, RoomInfo, ServerMessage } from "../server/protocol.ts"
 
@@ -145,8 +146,8 @@ export class OnlineNetClient {
     }
   }
 
-  public createRoom(name: string, loadout: CombatLoadout, cosmetics: CosmeticLoadout): void {
-    this.send({ type: "createRoom", name, loadout, cosmetics })
+  public createRoom(name: string, loadout: CombatLoadout, cosmetics: CosmeticLoadout, mapId?: MapId): void {
+    this.send({ type: "createRoom", name, loadout, cosmetics, mapId })
   }
 
   public joinRoom(

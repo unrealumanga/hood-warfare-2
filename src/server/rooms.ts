@@ -1,3 +1,4 @@
+import { sanitizeMapId, type MapId } from "../sim/maps.ts"
 import type { WebSocket } from "ws"
 import {
   Intent,
@@ -33,6 +34,7 @@ interface ConnectedClient {
 }
 
 interface RoomRecord {
+  readonly mapId: MapId
   readonly code: string
   status: "lobby" | "playing" | "finished"
   hostHumanId: string | null
@@ -335,6 +337,7 @@ export class RoomManager {
     this.detachClient(client)
     const code = this.generateRoomCode()
     const room: RoomRecord = {
+      mapId: sanitizeMapId(msg.mapId),
       code,
       status: "lobby",
       hostHumanId: client.humanId,
@@ -463,6 +466,7 @@ export class RoomManager {
 
     const runtime = makeMatchRuntime({
       seed: room.matchSeed++,
+      mapId: room.mapId,
       initialHumans
     })
     const bootRes = runtime.tick(setupSchedule)

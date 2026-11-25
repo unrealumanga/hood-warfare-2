@@ -1,3 +1,4 @@
+import type { MapId } from "./maps.ts"
 import {
   EventFeed,
   Fighter,
@@ -21,6 +22,7 @@ import {
 import type { GameModeId } from "./data.ts"
 
 export interface MatchSnapshot {
+  readonly mapId: MapId
   readonly mode: GameModeId
   readonly anomalyEnabled: boolean
   readonly anomalyActive: boolean
@@ -80,6 +82,7 @@ export const ReadMatchSnapshot = Game.Inspector(
       .sort((a, b) => a.projectileId - b.projectileId)
 
     return {
+      mapId: match.mapId,
       mode: match.mode,
       anomalyEnabled: match.anomalyEnabled,
       anomalyActive: match.anomalyActive,
