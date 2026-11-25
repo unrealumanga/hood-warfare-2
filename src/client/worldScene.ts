@@ -609,6 +609,17 @@ export class BellYardScene {
     }
   }
 
+  /** Project a world point to canvas pixel coordinates (for DOM overlays such as damage numbers). */
+  public projectToScreen(x: number, y: number, z: number): { readonly x: number; readonly y: number; readonly visible: boolean } {
+    const v = new THREE.Vector3(x, y, z).project(this.camera)
+    const el = this.renderer.domElement
+    return {
+      x: ((v.x + 1) / 2) * el.clientWidth,
+      y: ((1 - v.y) / 2) * el.clientHeight,
+      visible: v.z > -1 && v.z < 1
+    }
+  }
+
   public resetMatchState(): void {
     this.predictedKin = null
     this.pendingInputs = []

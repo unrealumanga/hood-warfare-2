@@ -359,6 +359,7 @@ class HoodWarfareApp {
 
         <div class="crosshair"></div>
         <div id="hitmarker" class="hitmarker"></div>
+        <div id="hit-floaters" class="hit-floaters"></div>
         <div id="hud-reticle-tag" class="hud-reticle-tag hidden"></div>
 
         <div class="hud-abilities">
@@ -1290,8 +1291,11 @@ class HoodWarfareApp {
         break
       case "hit":
         if (isLocalActor) {
-          this.audio.playHit()
+          if (ev.zone === "head") this.audio.playHeadshot()
+          else if (ev.zone === "limb") this.audio.playLimbHit()
+          else this.audio.playHit()
           this.flashHitmarker(ev.zone)
+          this.spawnHitFloater(ev)
         }
         break
       case "armorBreak":
@@ -1303,7 +1307,9 @@ class HoodWarfareApp {
       case "elim": {
         if (isLocalActor) {
           this.audio.playElim()
+          if (ev.zone === "head") this.audio.playHeadshot()
           this.flashHitmarker(ev.zone)
+          this.spawnHitFloater(ev)
         }
         const actor = this.currentSnapshot?.fighters.find((f) => f.slotId === ev.actorSlot)
         const target = this.currentSnapshot?.fighters.find((f) => f.slotId === ev.targetSlot)
@@ -1356,6 +1362,22 @@ class HoodWarfareApp {
         this.audio.playMuralRotate()
         break
     }
+  }
+
+  /** Floating damage number at the point of impact: HEADSHOT (big, ochre) / torso / limb (small, grey). */
+  private spawnHitFloater(ev: { readonly kind: string; readonly zone?: string; readonly damage: number; readonly x: number; readonly y: number; readonly z: number }): void {
+    const host = this.q("#hit-floaters")
+    const p = this.scene.projectToScreen(ev.x, ev.y, ev.z)
+    if (!p.visible) return
+    const el = document.createElement("div")
+    const zone = ev.zone === "head" || ev.zone === "limb" ? ev.zone : "torso"
+    el.className = `hit-floater ${zone}${ev.kind === "elim" ? " kill" : ""}`
+    el.textContent = `${zone === "head" ? "HEADSHOT " : ""}${ev.damage}`
+    el.style.left = `${Math.round(p.x)}px`
+    el.style.top = `${Math.round(p.y)}px`
+    host.appendChild(el)
+    while (host.childElementCount > 8) host.firstElementChild?.remove()
+    setTimeout(() => el.remove(), 900)
   }
 
   private flashHitmarker(zone?: string): void {

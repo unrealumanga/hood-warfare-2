@@ -169,6 +169,17 @@ export class SoundEngine {
     this.playTone("triangle", 1180, 760, 0.045, 0.14)
   }
 
+  /** Sharp high double-ping: distinct from the torso hit so a headshot is audible. */
+  public playHeadshot(): void {
+    this.playTone("square", 1900, 2400, 0.05, 0.16)
+    setTimeout(() => this.playTone("triangle", 2600, 3200, 0.08, 0.14), 45)
+  }
+
+  /** Dull low thud for limb hits. */
+  public playLimbHit(): void {
+    this.playTone("triangle", 380, 220, 0.06, 0.12)
+  }
+
   public playArmorBreak(): void {
     this.playNoise(0.16, 0.26, 2800, 1.1)
     this.playTone("sawtooth", 920, 240, 0.15, 0.18)
