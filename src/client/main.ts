@@ -2,9 +2,14 @@ import { FixedLoop } from "@typeonce/ritmo"
 import {
   ARMORS,
   ARMOR_IDS,
+  BOSS_HP,
+  BOSS_NAME,
   CREWS,
   DEFAULT_COSMETICS,
   DEFAULT_LOADOUT,
+  DIFFICULTY_DEFAULT,
+  DIFFICULTY_MAX,
+  DIFFICULTY_MIN,
   GRAPPLE_LEDGES,
   GRAPPLE_RANGE,
   GUNS,
@@ -60,6 +65,7 @@ interface SavedProfile {
   bankedScrap: number
   extractionsCompleted: number
   gildedUnlocked: boolean
+  campaignLevel: number
 }
 
 function loadProfile(): SavedProfile {
@@ -88,7 +94,14 @@ function loadProfile(): SavedProfile {
           typeof p["extractionsCompleted"] === "number" && p["extractionsCompleted"] >= 0
             ? Math.floor(p["extractionsCompleted"])
             : 0,
-        gildedUnlocked: Boolean(p["gildedUnlocked"])
+        gildedUnlocked: Boolean(p["gildedUnlocked"]),
+        campaignLevel:
+          typeof p["campaignLevel"] === "number" &&
+          Number.isInteger(p["campaignLevel"]) &&
+          p["campaignLevel"] >= DIFFICULTY_MIN &&
+          p["campaignLevel"] <= DIFFICULTY_MAX
+            ? p["campaignLevel"]
+            : DIFFICULTY_DEFAULT
       }
     }
   } catch {
@@ -103,7 +116,8 @@ function loadProfile(): SavedProfile {
     muted: false,
     bankedScrap: 0,
     extractionsCompleted: 0,
-    gildedUnlocked: false
+    gildedUnlocked: false,
+    campaignLevel: DIFFICULTY_DEFAULT
   }
 }
 
@@ -177,6 +191,12 @@ class HoodWarfareApp {
   private predictedFireCooldown = 0
   private predictedWasFireHeld = false
 
+  private cachedThreatDifficulty: number | null = null
+  private cachedBossActive: boolean | null = null
+  private cachedBossHp: number | null = null
+  private cachedBossMaxHp: number | null = null
+  private lastThreatProgression: { from: number; to: number } | null = null
+
   private killfeedSeq = 0
   private readonly killfeedEls = new Map<number, HTMLElement>()
   private readonly killfeed: Array<{
@@ -188,6 +208,7 @@ class HoodWarfareApp {
     readonly gun: string
     readonly zone: string | undefined
     readonly mine: boolean
+    readonly boss?: boolean
     readonly expiresAt: number
   }> = []
 
@@ -201,6 +222,12 @@ class HoodWarfareApp {
   private readonly titleErrorEl: HTMLElement
   private readonly clickLockEl: HTMLElement
   private readonly respawnBannerEl: HTMLElement
+  private readonly hudThreatEl: HTMLElement
+  private readonly hudBossBarEl: HTMLElement
+  private readonly hudBossHpFillEl: HTMLElement
+  private readonly hudBossHpValEl: HTMLElement
+  private readonly bossBannerEl: HTMLElement
+  private readonly pickupToastEl: HTMLElement
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -217,6 +244,12 @@ class HoodWarfareApp {
     this.titleErrorEl = this.q("#title-error")
     this.clickLockEl = this.q("#click-lock-hint")
     this.respawnBannerEl = this.q("#respawn-banner")
+    this.hudThreatEl = this.q("#hud-threat-pill")
+    this.hudBossBarEl = this.q("#hud-boss-bar")
+    this.hudBossHpFillEl = this.q("#hud-boss-hp-fill")
+    this.hudBossHpValEl = this.q("#hud-boss-hp-val")
+    this.bossBannerEl = this.q("#boss-banner")
+    this.pickupToastEl = this.q("#pickup-toast")
 
     this.scene = new BellYardScene(this.viewportEl, {
       onEvent: (ev, isLocalActor, isLocalTarget) => this.handleSimEvent(ev, isLocalActor, isLocalTarget)
@@ -344,10 +377,22 @@ class HoodWarfareApp {
             <div id="hud-clock" class="hud-clock">5:00</div>
             <div class="score-pill vermilion"><span id="hud-score-1" class="score-num">0</span><span>VERMILION</span></div>
           </div>
-          <div id="hud-mural-pill" class="hud-mural-pill">
-            <span id="hud-mural-name">PRINT SHOP COURTYARD</span>
-            <span id="hud-mural-timer">0:45</span>
-            <span id="hud-mural-state">NEUTRAL</span>
+          <div class="hud-top-sub">
+            <div id="hud-mural-pill" class="hud-mural-pill">
+              <span id="hud-mural-name">PRINT SHOP COURTYARD</span>
+              <span id="hud-mural-timer">0:45</span>
+              <span id="hud-mural-state">NEUTRAL</span>
+            </div>
+            <div id="hud-threat-pill" class="hud-threat-pill">THREAT ${this.profile.campaignLevel}</div>
+          </div>
+          <div id="hud-boss-bar" class="hud-boss-bar hidden">
+            <div class="boss-bar-header">
+              <span class="boss-name">${BOSS_NAME}</span>
+              <span id="hud-boss-hp-val" class="boss-hp-val">350 / 350</span>
+            </div>
+            <div class="boss-bar-track">
+              <div id="hud-boss-hp-fill" class="boss-bar-fill" style="width:100%"></div>
+            </div>
           </div>
         </div>
 
@@ -360,6 +405,8 @@ class HoodWarfareApp {
         <div id="hitmarker" class="hitmarker"></div>
         <div id="hit-floaters" class="hit-floaters"></div>
         <div id="hud-reticle-tag" class="hud-reticle-tag hidden"></div>
+        <div id="boss-banner" class="boss-banner"></div>
+        <div id="pickup-toast" class="pickup-toast"></div>
 
         <div class="hud-abilities">
           <div id="chip-sketch" class="ability-chip">[Q] SKETCH 1/1</div>
@@ -511,6 +558,7 @@ class HoodWarfareApp {
         <div class="ink-card" style="max-width:600px">
           <h2 id="result-heading" class="ink-title">Match Complete</h2>
           <p id="result-sub" class="ink-subtitle"></p>
+          <p id="result-threat" class="result-threat"></p>
           <div id="result-board" class="roster-grid"></div>
           <div class="ink-row" style="justify-content:space-between;margin-top:14px">
             <button id="btn-result-title" class="ink-btn">Title Screen</button>
@@ -1047,6 +1095,11 @@ class HoodWarfareApp {
     this.matchRewardSettled = false
     this.inputSeq = 0
     this.predictedFireCooldown = 0
+    this.cachedThreatDifficulty = null
+    this.cachedBossActive = null
+    this.cachedBossHp = null
+    this.cachedBossMaxHp = null
+    this.lastThreatProgression = null
     if (this.profile.loadout.primary !== "cursedBlock") {
       this.preCursedPrimary = this.profile.loadout.primary
     }
@@ -1056,6 +1109,7 @@ class HoodWarfareApp {
       mode: this.selectedOfflineMode,
       anomalyEnabled: this.selectedAnomaly,
       equipmentStaked: this.selectedOfflineMode === "extraction" && this.selectedStakeEquip,
+      difficulty: this.profile.campaignLevel,
       initialHumans: [
         {
           slotId: 0,
@@ -1150,6 +1204,10 @@ class HoodWarfareApp {
     this.menuOpen = false
     this.inputSeq = 0
     this.predictedFireCooldown = 0
+    this.cachedThreatDifficulty = null
+    this.cachedBossActive = null
+    this.cachedBossHp = null
+    this.cachedBossMaxHp = null
     this.syncOverlays()
 
     // 60Hz input sampler + local prediction + server transmit
@@ -1191,6 +1249,11 @@ class HoodWarfareApp {
     this.currentSnapshot = null
     this.mode = "title"
     this.menuOpen = false
+    this.cachedThreatDifficulty = null
+    this.cachedBossActive = null
+    this.cachedBossHp = null
+    this.cachedBossMaxHp = null
+    this.hudBossBarEl.classList.add("hidden")
     this.scene.resetMatchState()
     this.syncOverlays()
     this.startTitleLoop()
@@ -1207,6 +1270,16 @@ class HoodWarfareApp {
     // Milestone 5 & 6: Settle Extraction banked scrap & Cursed Proof-Block unlock ONCE per finished match!
     if (!this.matchRewardSettled) {
       this.matchRewardSettled = true
+      const me = snap.fighters.find((f) => f.slotId === this.localSlotId)
+      const myCrew = me?.crew ?? 0
+      const prevLevel = this.profile.campaignLevel
+      if (snap.winner === myCrew) {
+        this.profile.campaignLevel = Math.min(DIFFICULTY_MAX, this.profile.campaignLevel + 1)
+      } else if (snap.winner !== null && snap.winner !== "draw") {
+        this.profile.campaignLevel = Math.max(DIFFICULTY_MIN, this.profile.campaignLevel - 1)
+      }
+      this.lastThreatProgression = { from: prevLevel, to: this.profile.campaignLevel }
+
       if (snap.mode === "extraction" && snap.extraction) {
         if (snap.extraction.extracted) {
           this.profile.bankedScrap += snap.extraction.carriedScrap
@@ -1216,7 +1289,6 @@ class HoodWarfareApp {
           this.profile.loadout = { primary: "rollerSmg", armor: "light" }
         }
       }
-      const me = snap.fighters.find((f) => f.slotId === this.localSlotId)
       if (me?.primaryGun === "cursedBlock") {
         this.profile.gildedUnlocked = true
         // Return to normal loadout next run automatically!
@@ -1251,6 +1323,13 @@ class HoodWarfareApp {
       heading.textContent = "Match Drawn"
       sub.textContent = `Final Score · Cobalt ${snap.scores[0]} — ${snap.scores[1]} Vermilion`
     }
+
+    const threatEl = this.q("#result-threat")
+    const prog = this.lastThreatProgression ?? {
+      from: this.profile.campaignLevel,
+      to: this.profile.campaignLevel
+    }
+    threatEl.textContent = `Threat level ${prog.from} -> ${prog.to}`
 
     const renderCrew = (crew: CrewId) =>
       snap.fighters
@@ -1314,6 +1393,11 @@ class HoodWarfareApp {
         const target = this.currentSnapshot?.fighters.find((f) => f.slotId === ev.targetSlot)
         if (actor && target) {
           const gunName = ev.gunId ? GUNS[ev.gunId].name : "Ink"
+          const isBossKill = Boolean(
+            target.isBoss ||
+            target.name === BOSS_NAME ||
+            (this.currentSnapshot && target.slotId === this.currentSnapshot.bossSlot)
+          )
           this.killfeed.push({
             id: ++this.killfeedSeq,
             killer: actor.name,
@@ -1323,12 +1407,25 @@ class HoodWarfareApp {
             gun: gunName,
             zone: ev.zone,
             mine: isLocalActor || isLocalTarget,
+            boss: isBossKill,
             expiresAt: performance.now() + 6000
           })
           if (this.killfeed.length > 6) this.killfeed.shift()
         }
         break
       }
+      case "pickup":
+        if (isLocalActor) {
+          this.audio.playPickup()
+          this.showPickupToast(ev.damage)
+        }
+        break
+      case "bossSpawn":
+        this.showBossBanner(`BOSS ENTERS - ${BOSS_NAME}`, "spawn")
+        break
+      case "bossDown":
+        this.showBossBanner("BOSS DOWN", "down")
+        break
       case "muralRotate":
         this.audio.playMuralRotate()
         break
@@ -1399,7 +1496,7 @@ class HoodWarfareApp {
       let el = this.killfeedEls.get(k.id)
       if (!el) {
         el = document.createElement("div")
-        el.className = `killfeed-item${k.mine ? " mine" : ""}`
+        el.className = `killfeed-item${k.mine ? " mine" : ""}${k.boss ? " boss" : ""}`
         const part = (cls: string, text: string): HTMLElement => {
           const span = document.createElement("span")
           span.className = cls
@@ -1420,6 +1517,23 @@ class HoodWarfareApp {
         this.killfeedEls.delete(id)
       }
     }
+  }
+
+  private showPickupToast(damage: number): void {
+    const el = this.pickupToastEl
+    const amt = damage > 0 ? damage : 60
+    el.textContent = `+${amt} HP`
+    el.className = "pickup-toast"
+    void el.offsetWidth
+    el.className = "pickup-toast show"
+  }
+
+  private showBossBanner(text: string, kind: "spawn" | "down"): void {
+    const el = this.bossBannerEl
+    el.textContent = text
+    el.className = "boss-banner"
+    void el.offsetWidth
+    el.className = `boss-banner ${kind} show`
   }
 
   /** One-shot hit indicator. The CSS animation ends at opacity 0 by itself, so it cannot stay on screen.
@@ -1480,6 +1594,41 @@ class HoodWarfareApp {
     } else if (this.currentRoom) {
       const pingTxt = this.rttMs !== null ? ` · ${this.rttMs}ms` : ""
       badge.textContent = `ONLINE ROOM ${this.currentRoom.code} · ${this.currentRoom.members.length}P${pingTxt}`
+    }
+
+    // Threat level pill: updated only on change, colour shifts from ochre to vermilion as it rises
+    if (this.cachedThreatDifficulty !== snap.difficulty) {
+      this.cachedThreatDifficulty = snap.difficulty
+      this.hudThreatEl.textContent = `THREAT ${snap.difficulty}`
+      const t = Math.max(0, Math.min(1, snap.difficulty / DIFFICULTY_MAX))
+      const r = Math.round(179 + t * (176 - 179))
+      const g = Math.round(132 + t * (74 - 132))
+      const b = Math.round(54 + t * (57 - 54))
+      const col = `rgb(${r}, ${g}, ${b})`
+      this.hudThreatEl.style.color = col
+      this.hudThreatEl.style.borderColor = col
+    }
+
+    // Top-centre boss health bar: shown while boss fighter exists (alive, isBoss, bossSlot)
+    const bossFighter =
+      snap.bossSlot >= 0
+        ? snap.fighters.find((f) => f.slotId === snap.bossSlot && f.isBoss && f.alive)
+        : undefined
+    const bossActive = Boolean(bossFighter)
+    if (this.cachedBossActive !== bossActive) {
+      this.cachedBossActive = bossActive
+      this.hudBossBarEl.classList.toggle("hidden", !bossActive)
+    }
+    if (bossFighter) {
+      const maxHp = bossFighter.maxHp > 0 ? bossFighter.maxHp : BOSS_HP
+      const curHp = Math.max(0, bossFighter.hp)
+      if (this.cachedBossHp !== curHp || this.cachedBossMaxHp !== maxHp) {
+        this.cachedBossHp = curHp
+        this.cachedBossMaxHp = maxHp
+        this.hudBossHpValEl.textContent = `${curHp} / ${maxHp}`
+        const pct = Math.max(0, Math.min(100, (curHp / maxHp) * 100))
+        this.hudBossHpFillEl.style.width = `${pct.toFixed(1)}%`
+      }
     }
 
     const now = performance.now()

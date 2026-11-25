@@ -3,6 +3,7 @@ import * as THREE from "three"
 import {
   ANOMALY_COURTYARD,
   ARMORS,
+  BOSS_SCALE,
   CABLE_CAR_SPLINE,
   CREWS,
   EXTRACTION_EXIT,
@@ -47,6 +48,7 @@ interface RemoteVisual {
   displayZ: number
   displayYaw: number
   stridePhase: number
+  menaceMarker?: THREE.Mesh
 }
 
 interface BurstFx {
@@ -105,6 +107,9 @@ export class BellYardScene {
   private readonly extractionMarkers = new THREE.Group()
   private readonly foundrySiegeGroup = new THREE.Group()
   private readonly dummyObj = new THREE.Object3D()
+
+  private healthPickupGroup: THREE.Group | null = null
+  private healthPickupCrate: THREE.Group | null = null
 
   private viewmodel: ViewmodelRig | null = null
   private vmRecoil = 0
@@ -641,6 +646,76 @@ export class BellYardScene {
       disposeObject3D(m)
     }
     this.projectileMeshes.clear()
+
+    if (this.healthPickupGroup) {
+      this.worldScene.remove(this.healthPickupGroup)
+      disposeObject3D(this.healthPickupGroup)
+      this.healthPickupGroup = null
+      this.healthPickupCrate = null
+    }
+  }
+
+  private buildHealthPickupMesh(): THREE.Group {
+    const root = new THREE.Group()
+
+    // Glowing ground ring at feet level
+    const ringGeo = new THREE.RingGeometry(0.65, 0.85, 32)
+    const ringMat = new THREE.MeshBasicMaterial({
+      color: 0x22c55e,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: false
+    })
+    const ring = new THREE.Mesh(ringGeo, ringMat)
+    ring.rotation.x = -Math.PI / 2
+    ring.position.y = 0.04
+    root.add(ring)
+
+    // Floating crate container (+0.9m base height)
+    const crateGroup = new THREE.Group()
+    crateGroup.position.y = 0.9
+
+    // Medkit crate body (ivory paper card with ink edges)
+    const crateMat = createInkMaterial(0xf4f7f2, { hatchStrength: 0.22 })
+    const crateMesh = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.38, 0.34), crateMat)
+    crateMesh.castShadow = true
+    addInkEdges(crateMesh, 20)
+    crateGroup.add(crateMesh)
+
+    // Green cross emblems (front, back, and top)
+    const crossMat = new THREE.MeshBasicMaterial({ color: 0x22c55e })
+    const addCross = (rx: number, ry: number, rz: number, px: number, py: number, pz: number) => {
+      const g = new THREE.Group()
+      g.position.set(px, py, pz)
+      g.rotation.set(rx, ry, rz)
+      const hBar = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.07, 0.015), crossMat)
+      const vBar = new THREE.Mesh(new THREE.BoxGeometry(0.07, 0.24, 0.015), crossMat)
+      g.add(hBar)
+      g.add(vBar)
+      crateGroup.add(g)
+    }
+    // Front face
+    addCross(0, 0, 0, 0, 0, 0.171)
+    // Back face
+    addCross(0, Math.PI, 0, 0, 0, -0.171)
+    // Top face
+    addCross(-Math.PI / 2, 0, 0, 0, 0.191, 0)
+
+    // Soft glowing octahedron aura around medkit crate
+    const auraGeo = new THREE.OctahedronGeometry(0.38, 0)
+    const auraMat = new THREE.MeshBasicMaterial({
+      color: 0x22c55e,
+      transparent: true,
+      opacity: 0.28,
+      depthWrite: false
+    })
+    const aura = new THREE.Mesh(auraGeo, auraMat)
+    crateGroup.add(aura)
+
+    root.add(crateGroup)
+    this.healthPickupCrate = crateGroup
+    return root
   }
 
   /** Step local client movement prediction immediately upon sampling input */
@@ -832,6 +907,8 @@ export class BellYardScene {
         this.spawnBurst(ev.x, ev.y, ev.z, 0x3b72c4, 0.55, 0.36)
       } else if (ev.kind === "elim") {
         this.spawnBurst(ev.x, ev.y, ev.z, INKLINE_PALETTE.vermilion, 0.72, 0.48)
+      } else if (ev.kind === "pickup") {
+        this.spawnBurst(ev.x, ev.y, ev.z, 0x22c55e, 0.72, 0.45)
       }
 
       this.callbacks.onEvent?.(ev, isLocalActor, isLocalTarget)
@@ -1035,6 +1112,26 @@ export class BellYardScene {
     } else {
       for (const m of this.scrapMeshes.values()) m.visible = false
     }
+
+    // 8. Health booster medkit pickup
+    if (snapshot.healthPickup) {
+      if (!this.healthPickupGroup) {
+        this.healthPickupGroup = this.buildHealthPickupMesh()
+        this.worldScene.add(this.healthPickupGroup)
+      }
+      this.healthPickupGroup.visible = snapshot.healthPickup.available
+      if (snapshot.healthPickup.available) {
+        this.healthPickupGroup.position.set(
+          snapshot.healthPickup.x,
+          snapshot.healthPickup.y,
+          snapshot.healthPickup.z
+        )
+        if (this.healthPickupCrate) {
+          this.healthPickupCrate.position.y = 0.9 + Math.sin(nowMs * 0.003) * 0.08
+          this.healthPickupCrate.rotation.y = nowMs * 0.0018
+        }
+      }
+    }
   }
 
   private syncActiveMural(snapshot: MatchSnapshot, nowMs: number): void {
@@ -1197,6 +1294,32 @@ export class BellYardScene {
       rv.rig.root.rotation.y = rv.displayYaw
       rv.rig.headGroup.rotation.x = f.pitch * 0.7
       rv.rig.rightArm.rotation.x = f.pitch * 0.7
+
+      if (f.isBoss) {
+        rv.rig.root.scale.setScalar(BOSS_SCALE)
+        if (!rv.menaceMarker) {
+          const ringGeo = new THREE.RingGeometry(0.72, 0.96, 32)
+          const ringMat = new THREE.MeshBasicMaterial({
+            color: INKLINE_PALETTE.vermilion,
+            side: THREE.DoubleSide,
+            transparent: true,
+            opacity: 0.85,
+            depthWrite: false
+          })
+          const ring = new THREE.Mesh(ringGeo, ringMat)
+          ring.rotation.x = -Math.PI / 2
+          ring.position.y = 0.04
+          rv.rig.root.add(ring)
+          rv.menaceMarker = ring
+        }
+        rv.menaceMarker.visible = true
+        rv.menaceMarker.rotation.z += dt * 2.0
+      } else {
+        rv.rig.root.scale.setScalar(1.0)
+        if (rv.menaceMarker) {
+          rv.menaceMarker.visible = false
+        }
+      }
 
       const speed = Math.hypot(f.vx, f.vz)
       if (speed > 0.35) {

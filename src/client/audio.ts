@@ -190,6 +190,12 @@ export class SoundEngine {
     setTimeout(() => this.playTone("triangle", 780, 1040, 0.14, 0.16), 85)
   }
 
+  /** Rising two-tone chime for health booster pickup */
+  public playPickup(): void {
+    this.playTone("sine", 540, 720, 0.12, 0.22)
+    setTimeout(() => this.playTone("sine", 840, 1120, 0.16, 0.24), 70)
+  }
+
   public playMuralRotate(): void {
     this.playTone("sawtooth", 290, 390, 0.18, 0.12)
     setTimeout(() => this.playTone("sawtooth", 390, 440, 0.24, 0.11), 160)
