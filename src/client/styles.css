@@ -776,20 +776,21 @@ body,
 
 .hud-abilities {
   position: absolute;
-  left: 50%;
+  left: 256px;
   bottom: 18px;
-  transform: translateX(-50%);
   display: flex;
-  gap: 8px;
+  gap: 5px;
+  z-index: 12;
+  white-space: nowrap;
 }
 
 .ability-chip {
   background: rgba(247, 248, 244, 0.92);
   border: 1.5px solid var(--ink-dark);
-  padding: 4px 9px;
-  font-size: 11px;
+  padding: 4px 7px;
+  font-size: 10px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.03em;
 }
 
 .ability-chip.active {
@@ -801,6 +802,79 @@ body,
   background: #f5ebd2;
   border-color: var(--ochre);
   color: #6b4c14;
+}
+
+.ability-chip.armed {
+  background: var(--vermilion);
+  border-color: var(--ink-dark);
+  color: #f7f8f4;
+  animation: c4-pulse 0.85s ease-in-out infinite;
+}
+
+@keyframes c4-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(176, 74, 57, 0.55);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(176, 74, 57, 0);
+  }
+}
+
+/* Press Sniper 24° Optical Scope Overlay */
+#sniper-scope-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.hud-top,
+.hud-right-top,
+.hud-vitals,
+.hud-weapon {
+  z-index: 12;
+}
+
+#sniper-scope-overlay.hidden {
+  display: none;
+}
+
+#hud.scoped .crosshair {
+  opacity: 0;
+}
+
+/* Directional Incoming Damage Indicator Arc */
+#hud-dmg-arc {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  width: 240px;
+  height: 240px;
+  margin-left: -120px;
+  margin-top: -120px;
+  border-radius: 50%;
+  border: 6px solid transparent;
+  border-top-color: rgba(176, 74, 57, 0.92);
+  pointer-events: none;
+  opacity: 0;
+  z-index: 11;
+}
+
+#hud-dmg-arc.show {
+  animation: dmg-arc-fade 0.55s ease-out forwards;
+}
+
+@keyframes dmg-arc-fade {
+  0% {
+    opacity: 0.95;
+  }
+  100% {
+    opacity: 0;
+  }
 }
 
 /* Floating hit numbers */

@@ -41,15 +41,13 @@ async function main() {
     `[dev:all] Starting Hood Warfare 2 server (ws://localhost:${SERVER_PORT}) and Vite client (http://localhost:${VITE_PORT})...`
   )
 
-  const serverProc = spawn(process.execPath, ["src/server/index.ts"], {
+  const serverProc = spawn(process.execPath, ["--import", "tsx", "src/server/index.ts"], {
     stdio: "inherit",
     env: { ...process.env, PORT: String(SERVER_PORT) }
   })
 
-  const viteCmd = process.platform === "win32" ? "npx.cmd" : "npx"
-  const viteProc = spawn(viteCmd, ["vite", "--port", String(VITE_PORT), "--strictPort"], {
+  const viteProc = spawn(process.execPath, ["node_modules/vite/bin/vite.js", "--port", String(VITE_PORT), "--strictPort", ...process.argv.slice(2)], {
     stdio: "inherit",
-    shell: process.platform === "win32",
     env: { ...process.env, VITE_WS_URL: `ws://localhost:${SERVER_PORT}` }
   })
 
@@ -71,6 +69,13 @@ async function main() {
 
   process.on("SIGINT", () => shutdown(0))
   process.on("SIGTERM", () => shutdown(0))
+
+  for (const child of [serverProc, viteProc]) {
+    child.on("error", (err) => {
+      console.error(`[dev:all] Failed to start process: ${err.message}`)
+      shutdown(1)
+    })
+  }
 
   serverProc.on("exit", (code) => {
     if (!shuttingDown) {

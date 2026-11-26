@@ -50,6 +50,7 @@ import {
 } from "../sim/index.ts"
 import type { RoomInfo } from "../server/protocol.ts"
 import { SoundEngine } from "./audio.ts"
+import { SNIPER_SCOPE_SVG } from "./combatFx.ts"
 import { LockerPreviewScene } from "./lockerScene.ts"
 import { OnlineNetClient, resolveDefaultWsUrl } from "./netClient.ts"
 import { BellYardScene, type SketchPreviewVisual } from "./worldScene.ts"
@@ -175,7 +176,9 @@ class HoodWarfareApp {
   private pointerLocked = false
   private pointerLockErrorText: string | null = null
   private mouseDown = false
-  private pendingSwitchSlot: 0 | 1 | 2 = 0
+  private rmbDown = false
+  private wasScoped = false
+  private pendingSwitchSlot: 0 | 1 | 2 | 3 = 0
   private pendingReload = false
   private sketchPreviewMode: "off" | "plank" | "barricade" = "off"
   private actionCounter = 1
@@ -183,6 +186,9 @@ class HoodWarfareApp {
   private pendingEraseId = 0
   private pendingParryId = 0
   private pendingSmokeId = 0
+  private pendingGrenadeId = 0
+  private pendingSatchelId = 0
+  private pendingMeleeId = 0
   private pendingGrappleId = 0
   private pendingGrappleReleaseId = 0
   private selectedMapId: MapId = this.profile.mapId
@@ -234,6 +240,8 @@ class HoodWarfareApp {
   private readonly hudBossHpValEl: HTMLElement
   private readonly bossBannerEl: HTMLElement
   private readonly pickupToastEl: HTMLElement
+  private readonly scopeOverlayEl: HTMLElement
+  private readonly dmgArcEl: HTMLElement
 
   constructor(root: HTMLElement) {
     this.root = root
@@ -256,6 +264,8 @@ class HoodWarfareApp {
     this.hudBossHpValEl = this.q("#hud-boss-hp-val")
     this.bossBannerEl = this.q("#boss-banner")
     this.pickupToastEl = this.q("#pickup-toast")
+    this.scopeOverlayEl = this.q("#sniper-scope-overlay")
+    this.dmgArcEl = this.q("#hud-dmg-arc")
 
     this.scene = new BellYardScene(this.viewportEl, {
       onEvent: (ev, isLocalActor, isLocalTarget) => this.handleSimEvent(ev, isLocalActor, isLocalTarget)
@@ -315,7 +325,13 @@ class HoodWarfareApp {
     this.syncOverlays()
 
     const inspectView = new URLSearchParams(window.location.search).get("inspect")
-    if (inspectView === "courtyard" || inspectView === "deck" || inspectView === "tram") {
+    if (
+      inspectView === "courtyard" ||
+      inspectView === "deck" ||
+      inspectView === "tram" ||
+      inspectView === "scope" ||
+      inspectView === "knife"
+    ) {
       this.startInspectView(inspectView)
     } else {
       this.startTitleLoop()
@@ -323,7 +339,7 @@ class HoodWarfareApp {
   }
 
   /** Deterministic eye-level visual inspection preset for Bell Yard screenshots & metrics */
-  private startInspectView(view: "courtyard" | "deck" | "tram"): void {
+  private startInspectView(view: "courtyard" | "deck" | "tram" | "scope" | "knife"): void {
     this.startOfflineMatch()
     if (!this.offlineRuntime) return
     // Stop live stepping so the matched inspection pose stays rock-steady while RAF renders it
@@ -331,7 +347,9 @@ class HoodWarfareApp {
     const poses = {
       courtyard: { x: 0, y: 0, z: 7.8, yaw: 0, pitch: 0.04 },
       deck: { x: -11.5, y: 3.6, z: -9.6, yaw: -1.18, pitch: -0.04 },
-      tram: { x: -5.4, y: 0, z: 14.0, yaw: -2.28, pitch: 0.02 }
+      tram: { x: -5.4, y: 0, z: 14.0, yaw: -2.28, pitch: 0.02 },
+      scope: { x: 0, y: 0, z: 8.5, yaw: 0, pitch: 0.02 },
+      knife: { x: 0, y: 0, z: 7.5, yaw: 0, pitch: 0.02 }
     } as const
     const p = poses[view]
     this.localYaw = p.yaw
@@ -339,7 +357,18 @@ class HoodWarfareApp {
     this.pointerLockErrorText = null
     if (this.currentSnapshot) {
       const fighters = this.currentSnapshot.fighters.map((f) => {
-        if (f.slotId === 0) return { ...f, x: p.x, y: p.y, z: p.z, yaw: p.yaw, pitch: p.pitch }
+        if (f.slotId === 0) {
+          return {
+            ...f,
+            x: p.x,
+            y: p.y,
+            z: p.z,
+            yaw: p.yaw,
+            pitch: p.pitch,
+            ...(view === "scope" ? { primaryGun: "pressSniper" as const, activeSlot: 1 as const, ads: true } : {}),
+            ...(view === "knife" ? { activeSlot: 3 as const } : {})
+          }
+        }
         if (f.slotId === 1) return { ...f, x: -2.2, y: 0, z: 0.6, yaw: -0.8 }
         if (f.slotId === 3) return { ...f, x: 2.0, y: 0, z: -0.8, yaw: 1.9 }
         if (f.slotId === 4) return { ...f, x: 0.8, y: 3.6, z: 0.0, yaw: 1.5 }
@@ -407,6 +436,8 @@ class HoodWarfareApp {
           <div id="hud-killfeed"></div>
         </div>
 
+        <div id="sniper-scope-overlay" class="hidden">${SNIPER_SCOPE_SVG}</div>
+        <div id="hud-dmg-arc"></div>
         <div class="crosshair"></div>
         <div id="hitmarker" class="hitmarker"></div>
         <div id="hit-floaters" class="hit-floaters"></div>
@@ -416,9 +447,11 @@ class HoodWarfareApp {
 
         <div class="hud-abilities">
           <div id="chip-sketch" class="ability-chip">[Q] SKETCH 1/1</div>
-          <div id="chip-parry" class="ability-chip">[F] PARRY</div>
-          <div id="chip-smoke" class="ability-chip">[G] SMOKE</div>
-          <div id="chip-grapple" class="ability-chip">[C/RMB] GRAPPLE</div>
+          <div id="chip-knife" class="ability-chip">[F/3] KNIFE</div>
+          <div id="chip-grenade" class="ability-chip">[G] GRENADE</div>
+          <div id="chip-satchel" class="ability-chip">[B] PLANT C4</div>
+          <div id="chip-grapple" class="ability-chip">[C] GRAPPLE</div>
+          <div id="chip-smoke" class="ability-chip">[T] SMOKE</div>
         </div>
 
         <div class="hud-vitals">
@@ -497,7 +530,7 @@ class HoodWarfareApp {
 
           <div class="ink-divider"></div>
           <div style="font-size:11px;color:var(--ink);display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px">
-            <span>WASD Move · LMB Fire · R Reload · Space Jump · <span class="crouch-hint">V/LeftCtrl CROUCH (hold)</span> · 1/2 Guns · Q Sketch · E Erase · F Parry · G Smoke · C/RMB Grapple</span>
+            <span>WASD Move · LMB Fire · RMB ADS/Scope · R Reload · Space Jump · <span class="crouch-hint">V/LeftCtrl CROUCH</span> · 1/2/3 Guns+Knife · F Knife/Parry · G Grenade · B Plant/Detonate C4 · Q Sketch · E Erase · C Grapple · T Smoke</span>
             <span>First to 100 pts or 5:00 · 45s Mural Rotation</span>
           </div>
         </div>
@@ -711,6 +744,7 @@ class HoodWarfareApp {
       if (this.mode === "offline" || this.mode === "onlineMatch") {
         if (code === "Digit1") this.pendingSwitchSlot = 1
         else if (code === "Digit2") this.pendingSwitchSlot = 2
+        else if (code === "Digit3") this.pendingSwitchSlot = 3
         else if (code === "KeyR") this.pendingReload = true
         else if (code === "KeyQ") {
           // Cycle Sketch preview: off -> plank (anchor or free) -> barricade -> off
@@ -724,8 +758,16 @@ class HoodWarfareApp {
         } else if (code === "KeyE") {
           this.pendingEraseId = ++this.actionCounter
         } else if (code === "KeyF") {
-          this.pendingParryId = ++this.actionCounter
+          // Commando Knife quick jab + unified Ink Parry window!
+          this.pendingMeleeId = ++this.actionCounter
         } else if (code === "KeyG") {
+          // Frag Grenade ballistic throw!
+          this.pendingGrenadeId = ++this.actionCounter
+        } else if (code === "KeyB") {
+          // Remote C4 Ink Satchel: 1st press plants, 2nd press remote-detonates!
+          this.pendingSatchelId = ++this.actionCounter
+        } else if (code === "KeyT") {
+          // Optional Ink Smoke screen
           this.pendingSmokeId = ++this.actionCounter
         } else if (code === "KeyC") {
           const me = this.currentSnapshot?.fighters.find((f) => f.slotId === this.localSlotId)
@@ -751,6 +793,7 @@ class HoodWarfareApp {
     window.addEventListener("blur", () => {
       this.pressedKeys.clear()
       this.mouseDown = false
+      this.rmbDown = false
     })
 
     this.viewportEl.addEventListener("contextmenu", (e) => {
@@ -766,9 +809,7 @@ class HoodWarfareApp {
         return
       }
       if (e.button === 2) {
-        const me = this.currentSnapshot?.fighters.find((f) => f.slotId === this.localSlotId)
-        if (me?.grapple) this.pendingGrappleReleaseId = ++this.actionCounter
-        else this.pendingGrappleId = ++this.actionCounter
+        this.rmbDown = true
         return
       }
       if (e.button === 0) {
@@ -791,11 +832,13 @@ class HoodWarfareApp {
 
     window.addEventListener("mouseup", (e) => {
       if (e.button === 0) this.mouseDown = false
+      if (e.button === 2) this.rmbDown = false
     })
 
     window.addEventListener("mousemove", (e) => {
       if (!this.pointerLocked || this.menuOpen || this.lockerOpen) return
-      const sens = 0.0022 * this.profile.sensitivity
+      const zoomScale = this.wasScoped ? 0.35 : this.rmbDown ? 0.72 : 1.0
+      const sens = 0.0022 * this.profile.sensitivity * zoomScale
       this.localYaw -= e.movementX * sens
       this.localPitch = Math.max(-1.4, Math.min(1.4, this.localPitch - e.movementY * sens))
     })
@@ -809,6 +852,7 @@ class HoodWarfareApp {
       this.pointerLocked = document.pointerLockElement === this.viewportEl
       if (!this.pointerLocked) {
         this.mouseDown = false
+        this.rmbDown = false
         if (
           (this.mode === "offline" || this.mode === "onlineMatch") &&
           this.currentSnapshot?.phase === "Playing" &&
@@ -930,6 +974,7 @@ class HoodWarfareApp {
       : 0
     const jump = canControl && this.pressedKeys.has("Space")
     const crouch = canControl && (this.pressedKeys.has("ControlLeft") || this.pressedKeys.has("KeyV"))
+    const ads = canControl && this.rmbDown
     const fire = canControl && this.mouseDown
     const reload = canControl && this.pendingReload
     const switchSlot = canControl ? this.pendingSwitchSlot : 0
@@ -938,6 +983,9 @@ class HoodWarfareApp {
     const eraseActionId = canControl ? this.pendingEraseId : 0
     const parryActionId = canControl ? this.pendingParryId : 0
     const smokeActionId = canControl ? this.pendingSmokeId : 0
+    const grenadeActionId = canControl ? this.pendingGrenadeId : 0
+    const satchelActionId = canControl ? this.pendingSatchelId : 0
+    const meleeActionId = canControl ? this.pendingMeleeId : 0
     const grappleActionId = canControl ? this.pendingGrappleId : 0
     const grappleReleaseId = canControl ? this.pendingGrappleReleaseId : 0
 
@@ -947,6 +995,9 @@ class HoodWarfareApp {
     this.pendingEraseId = 0
     this.pendingParryId = 0
     this.pendingSmokeId = 0
+    this.pendingGrenadeId = 0
+    this.pendingSatchelId = 0
+    this.pendingMeleeId = 0
     this.pendingGrappleId = 0
     this.pendingGrappleReleaseId = 0
     this.inputSeq += 1
@@ -959,6 +1010,7 @@ class HoodWarfareApp {
       pitch: this.localPitch,
       jump,
       crouch,
+      ads,
       fire,
       reload,
       switchSlot,
@@ -966,6 +1018,9 @@ class HoodWarfareApp {
       eraseActionId,
       parryActionId,
       smokeActionId,
+      grenadeActionId,
+      satchelActionId,
+      meleeActionId,
       grappleActionId,
       grappleReleaseId
     }
@@ -1085,7 +1140,7 @@ class HoodWarfareApp {
 
   private predictLocalShotFx(input: PlayerInput): void {
     const me = this.currentSnapshot?.fighters.find((f) => f.slotId === this.localSlotId)
-    if (!me || !me.alive || me.reloadTicksLeft > 0) {
+    if (!me || !me.alive || me.reloadTicksLeft > 0 || me.activeSlot === 3) {
       this.predictedWasFireHeld = input.fire
       return
     }
@@ -1111,6 +1166,10 @@ class HoodWarfareApp {
     this.localSlotId = 0
     this.localHumanId = "local"
     this.menuOpen = false
+    this.rmbDown = false
+    this.wasScoped = false
+    this.scopeOverlayEl.classList.add("hidden")
+    this.hudEl.classList.remove("scoped")
     this.sketchPreviewMode = "off"
     this.scene.setSketchPreview(null)
     this.matchRewardSettled = false
@@ -1274,6 +1333,10 @@ class HoodWarfareApp {
     this.currentSnapshot = null
     this.mode = "title"
     this.menuOpen = false
+    this.rmbDown = false
+    this.wasScoped = false
+    this.scopeOverlayEl.classList.add("hidden")
+    this.hudEl.classList.remove("scoped")
     this.cachedThreatDifficulty = null
     this.cachedBossActive = null
     this.cachedBossHp = null
@@ -1289,6 +1352,10 @@ class HoodWarfareApp {
       document.exitPointerLock()
     }
     this.menuOpen = false
+    this.rmbDown = false
+    this.wasScoped = false
+    this.scopeOverlayEl.classList.add("hidden")
+    this.hudEl.classList.remove("scoped")
     this.sketchPreviewMode = "off"
     this.scene.setSketchPreview(null)
 
@@ -1388,10 +1455,11 @@ class HoodWarfareApp {
     isLocalActor: boolean,
     isLocalTarget: boolean
   ): void {
+    const pos = { x: ev.x, y: ev.y, z: ev.z }
     switch (ev.kind) {
       case "shot":
         if (ev.gunId) {
-          this.audio.playGunshot(ev.gunId, isLocalActor ? 1.0 : 0.35)
+          this.audio.playGunshot(ev.gunId, isLocalActor ? 1.0 : 0.72, isLocalActor ? undefined : pos)
         }
         break
       case "reload":
@@ -1405,11 +1473,19 @@ class HoodWarfareApp {
           this.flashHitmarker(ev.zone, "hit")
           this.spawnHitFloater(ev)
         }
+        if (isLocalTarget) {
+          this.audio.playHurt(ev.damage)
+          this.flashDamageArc(ev.actorSlot, ev.x, ev.z)
+        }
         break
       case "armorBreak":
         if (isLocalActor || isLocalTarget) {
           this.audio.playArmorBreak()
           if (isLocalActor) this.flashHitmarker(ev.zone, "hit")
+          if (isLocalTarget) {
+            this.audio.playHurt(ev.damage)
+            this.flashDamageArc(ev.actorSlot, ev.x, ev.z)
+          }
         }
         break
       case "elim": {
@@ -1419,10 +1495,14 @@ class HoodWarfareApp {
           this.flashHitmarker(ev.zone, "kill")
           this.spawnHitFloater(ev)
         }
+        if (isLocalTarget) {
+          this.audio.playHurt(ev.damage)
+          this.flashDamageArc(ev.actorSlot, ev.x, ev.z)
+        }
         const actor = this.currentSnapshot?.fighters.find((f) => f.slotId === ev.actorSlot)
         const target = this.currentSnapshot?.fighters.find((f) => f.slotId === ev.targetSlot)
         if (actor && target) {
-          const gunName = ev.gunId ? (GUNS[ev.gunId]?.name ?? "Ink") : "Ink"
+          const gunName = ev.gunId ? (GUNS[ev.gunId]?.name ?? "Ink") : "Tactical"
           // Only the live boss counts: the old boss slot respawns as a normal bot afterwards
           const isBossKill = Boolean(target.isBoss || target.name === BOSS_NAME)
           this.killfeed.push({
@@ -1448,9 +1528,11 @@ class HoodWarfareApp {
         }
         break
       case "bossSpawn":
+        this.audio.playBossSpawn()
         this.showBossBanner(`BOSS ENTERS - ${BOSS_NAME}`, "spawn")
         break
       case "bossDown":
+        this.audio.playBossDown()
         this.showBossBanner("BOSS DOWN", "down")
         break
       case "muralRotate":
@@ -1468,8 +1550,31 @@ class HoodWarfareApp {
       case "smokeDeploy":
         this.audio.playSmokeDeploy()
         break
+      case "barrelHit":
+        this.audio.playBarrelSpark(pos)
+        if (isLocalActor) this.flashHitmarker("limb", "hit")
+        break
       case "barrelBlast":
-        this.audio.playBarrelBlast()
+        this.audio.playExplosion(1.15, pos)
+        break
+      case "grenadeThrow":
+        if (isLocalActor) this.audio.playGrenadeThrow()
+        break
+      case "grenadeBounce":
+        this.audio.playGrenadeBounce(pos)
+        break
+      case "grenadeBlast":
+        this.audio.playExplosion(1.25, pos)
+        break
+      case "satchelPlant":
+        this.audio.playSatchelPlant(pos)
+        break
+      case "satchelBlast":
+        if (isLocalActor) this.audio.playSatchelDetonate()
+        this.audio.playExplosion(1.4, pos)
+        break
+      case "knifeSlash":
+        this.audio.playKnifeSlash(false, false, isLocalActor ? undefined : pos)
         break
       case "grapple":
         if (isLocalActor) this.audio.playGrapple()
@@ -1486,6 +1591,28 @@ class HoodWarfareApp {
         this.audio.playMuralRotate()
         break
     }
+  }
+
+  /** Rotate and flash the directional incoming damage arc toward the attacker! */
+  private flashDamageArc(actorSlot: number, fallbackX: number, fallbackZ: number): void {
+    const me = this.currentSnapshot?.fighters.find((f) => f.slotId === this.localSlotId)
+    if (!me) return
+    const attacker = this.currentSnapshot?.fighters.find((f) => f.slotId === actorSlot)
+    const sx = attacker ? attacker.x : fallbackX
+    const sz = attacker ? attacker.z : fallbackZ
+    const dx = sx - me.x
+    const dz = sz - me.z
+    const fwdX = -Math.sin(this.localYaw)
+    const fwdZ = -Math.cos(this.localYaw)
+    const rightX = Math.cos(this.localYaw)
+    const rightZ = -Math.sin(this.localYaw)
+    const localFwd = dx * fwdX + dz * fwdZ
+    const localRight = dx * rightX + dz * rightZ
+    const angleDeg = (Math.atan2(localRight, localFwd) * 180) / Math.PI
+    this.dmgArcEl.style.transform = `rotate(${angleDeg.toFixed(1)}deg)`
+    this.dmgArcEl.classList.remove("show")
+    void this.dmgArcEl.offsetWidth
+    this.dmgArcEl.classList.add("show")
   }
 
   /** Floating damage number at the point of impact: HEADSHOT (big, ochre) / torso / limb (small, grey). */
@@ -1664,6 +1791,23 @@ class HoodWarfareApp {
     const me = snap.fighters.find((f) => f.slotId === this.localSlotId)
     if (!me) return
 
+    this.audio.setListener(
+      me.x,
+      me.y + (me.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT),
+      me.z,
+      this.localYaw
+    )
+
+    // Toggle Press Sniper 24° Optical Scope overlay
+    const isScoped =
+      me.alive && me.ads && me.activeSlot === 1 && Boolean(GUNS[me.primaryGun].hasScope)
+    if (isScoped !== this.wasScoped) {
+      this.wasScoped = isScoped
+      this.audio.playScopeToggle(isScoped)
+    }
+    this.scopeOverlayEl.classList.toggle("hidden", !isScoped)
+    this.hudEl.classList.toggle("scoped", isScoped)
+
     this.q("#hud-hp-val").textContent = String(me.hp)
     this.q("#hud-hp-bar").style.width = `${Math.max(0, Math.min(100, me.hp))}%`
     this.q("#hud-armor-label").textContent = `${me.armorType.toUpperCase()} ARMOR`
@@ -1671,14 +1815,19 @@ class HoodWarfareApp {
     const armorPct = me.maxArmor > 0 ? (me.armor / me.maxArmor) * 100 : 0
     this.q("#hud-armor-bar").style.width = `${Math.max(0, Math.min(100, armorPct))}%`
 
-    const gunId: GunId = me.activeSlot === 1 ? me.primaryGun : "proofPistol"
-    const gun = GUNS[gunId]
-    const ammo = me.activeSlot === 1 ? me.primaryAmmo : me.sidearmAmmo
-    this.q("#hud-weapon-name").textContent =
-      `${gun.name}${me.activeSlot === 1 ? " [1]" : " [2]"}`
-    this.q("#hud-ammo-val").textContent =
-      me.reloadTicksLeft > 0 ? "RELOADING..." : `${ammo} / ${gun.magSize}`
-    this.q("#hud-reload-hint").textContent = `[1] ${GUNS[me.primaryGun].name} · [2] Proof Pistol · [R] Reload · [V/LeftCtrl] CROUCH${me.crouching ? " •" : ""}`
+    if (me.activeSlot === 3) {
+      this.q("#hud-weapon-name").textContent = "COMMANDO KNIFE [3]"
+      this.q("#hud-ammo-val").textContent = me.meleeTicksLeft > 0 ? "SLASH!" : "BLADE"
+    } else {
+      const gunId: GunId = me.activeSlot === 1 ? me.primaryGun : "proofPistol"
+      const gun = GUNS[gunId]
+      const ammo = me.activeSlot === 1 ? me.primaryAmmo : me.sidearmAmmo
+      this.q("#hud-weapon-name").textContent =
+        `${gun.name}${me.activeSlot === 1 ? " [1]" : " [2]"}${me.ads ? (gun.hasScope ? " · SCOPE" : " · ADS") : ""}`
+      this.q("#hud-ammo-val").textContent =
+        me.reloadTicksLeft > 0 ? "RELOADING..." : `${ammo} / ${gun.magSize}`
+    }
+    this.q("#hud-reload-hint").textContent = `[1] Primary · [2] Pistol · [3] Knife · [RMB] ADS · [V] Crouch${me.crouching ? " •" : ""}`
 
     // Update Sketch preview ghost & Ability / Reticle chips
     this.updateSketchPreviewVisual()
@@ -1687,28 +1836,48 @@ class HoodWarfareApp {
     chipSketch.textContent = `[Q] SKETCH ${me.sketchCharges}/1`
     chipSketch.className = `ability-chip ${this.sketchPreviewMode !== "off" ? "active" : ""}`
 
-    const chipParry = this.q("#chip-parry")
-    chipParry.textContent =
-      me.parryTicksLeft > 0
-        ? "PARRYING!"
-        : me.parryCooldownTicks > 0
-          ? `[F] PARRY ${(me.parryCooldownTicks / TICK_HZ).toFixed(1)}s`
-          : "[F] PARRY READY"
-    chipParry.className = `ability-chip ${me.parryTicksLeft > 0 ? "active" : ""}`
+    const chipKnife = this.q("#chip-knife")
+    chipKnife.textContent =
+      me.meleeTicksLeft > 0 || me.parryTicksLeft > 0
+        ? "SLASH / PARRY!"
+        : me.meleeCooldownTicks > 0
+          ? `[F/3] KNIFE ${(me.meleeCooldownTicks / TICK_HZ).toFixed(1)}s`
+          : "[F/3] KNIFE"
+    chipKnife.className = `ability-chip ${me.meleeTicksLeft > 0 || me.parryTicksLeft > 0 ? "active" : ""}`
+
+    const chipGrenade = this.q("#chip-grenade")
+    chipGrenade.textContent =
+      me.grenadeCooldownTicks > 0
+        ? `[G] GRENADE ${(me.grenadeCooldownTicks / TICK_HZ).toFixed(1)}s`
+        : "[G] GRENADE"
+    chipGrenade.className = "ability-chip"
+
+    const mySatchel = snap.satchels.find((s) => s.ownerSlot === me.slotId)
+    const chipSatchel = this.q("#chip-satchel")
+    if (mySatchel) {
+      chipSatchel.textContent = "[B] DETONATE C4!"
+      chipSatchel.className = "ability-chip armed"
+    } else if (me.satchelCooldownTicks > 0) {
+      chipSatchel.textContent = `[B] C4 ${(me.satchelCooldownTicks / TICK_HZ).toFixed(1)}s`
+      chipSatchel.className = "ability-chip"
+    } else {
+      chipSatchel.textContent = "[B] PLANT C4"
+      chipSatchel.className = "ability-chip"
+    }
+
+    const chipGrapple = this.q("#chip-grapple")
+    chipGrapple.textContent = me.grapple
+      ? "GRAPPLING (SPACE)"
+      : me.grappleCooldownTicks > 0
+        ? `[C] GRAPPLE ${(me.grappleCooldownTicks / TICK_HZ).toFixed(1)}s`
+        : "[C] GRAPPLE"
+    chipGrapple.className = `ability-chip ${me.grapple ? "active" : ""}`
 
     const chipSmoke = this.q("#chip-smoke")
     chipSmoke.textContent =
       me.smokeCooldownTicks > 0
-        ? `[G] SMOKE ${(me.smokeCooldownTicks / TICK_HZ).toFixed(0)}s`
-        : "[G] INK SMOKE"
-
-    const chipGrapple = this.q("#chip-grapple")
-    chipGrapple.textContent = me.grapple
-      ? "GRAPPLING (SPACE RELEASE)"
-      : me.grappleCooldownTicks > 0
-        ? `[C] GRAPPLE ${(me.grappleCooldownTicks / TICK_HZ).toFixed(1)}s`
-        : "[C/RMB] GRAPPLE"
-    chipGrapple.className = `ability-chip ${me.grapple ? "active" : ""}`
+        ? `[T] SMOKE ${(me.smokeCooldownTicks / TICK_HZ).toFixed(0)}s`
+        : "[T] SMOKE"
 
     // Context-sensitive reticle prompt (Sketch preview -> Erase opposing plank -> Grapple target)
     const reticleTag = this.q("#hud-reticle-tag")
@@ -1739,7 +1908,7 @@ class HoodWarfareApp {
           const dz = l.z - me.z
           const dist = Math.hypot(dx, dy, dz)
           if (dist >= 1.5 && dist <= GRAPPLE_RANGE && (dx * aimX + dy * aimY + dz * aimZ) / dist > 0.88) {
-            tagText = `[C/RMB] GRAPPLE LEDGE · ${l.label}`
+            tagText = `[C] GRAPPLE LEDGE · ${l.label}`
             break
           }
         }
@@ -1751,7 +1920,7 @@ class HoodWarfareApp {
             const dz = p.z - me.z
             const dist = Math.hypot(dx, dy, dz)
             if (dist >= 1.8 && dist <= GRAPPLE_RANGE && (dx * aimX + dy * aimY + dz * aimZ) / dist > 0.88) {
-              tagText = "[C/RMB] PULL PRESS BARREL"
+              tagText = "[C] PULL PRESS BARREL"
               break
             }
           }

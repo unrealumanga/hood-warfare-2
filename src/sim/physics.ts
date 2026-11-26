@@ -490,3 +490,142 @@ export function hasLineOfSight(
   }
   return true
 }
+
+// ── Solid Fighter Body Collision (No Ghost Pass-Through!) ────────────────
+
+export interface BodyCollider {
+  readonly slotId: number
+  readonly crew: number
+  readonly alive: boolean
+  x: number
+  readonly y: number
+  z: number
+  readonly height: number
+  readonly radius: number
+}
+
+/**
+ * Resolves capsule-vs-capsule overlaps between fighters so enemies NEVER pass through
+ * each other like ghosts, while teammates apply gentle soft-separation so allies cannot
+ * permanently trap each other in doorways. Wall-clamped via `isAreaFree`!
+ */
+export function resolveFighterBodyCollisions(
+  bodies: ReadonlyArray<BodyCollider>,
+  extraSolids: ReadonlyArray<MapBox>,
+  map = MAPS.bellYard
+): void {
+  const n = bodies.length
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 0; i < n; i++) {
+      const a = bodies[i]!
+      if (!a.alive) continue
+      for (let j = i + 1; j < n; j++) {
+        const b = bodies[j]!
+        if (!b.alive) continue
+        // Check vertical overlap first (standing on bridge above someone does not collide)
+        if (a.y + a.height <= b.y + 0.05 || b.y + b.height <= a.y + 0.05) continue
+
+        const dx = b.x - a.x
+        const dz = b.z - a.z
+        const minDist = a.radius + b.radius
+        const dist = Ops.hypot(dx, dz)
+        if (dist >= minDist) continue
+
+        const nx = dist > 1e-4 ? dx / dist : (i % 2 === 0 ? 1 : -1)
+        const nz = dist > 1e-4 ? dz / dist : 0
+        const overlap = minDist - dist
+        // Firm solid separation against enemies; slightly softer against allies to avoid doorway locks
+        const strength = a.crew === b.crew ? 0.58 : 1.0
+        const halfPush = overlap * 0.5 * strength
+
+        const nextAx = Math.max(map.movementBounds.minX, Math.min(map.movementBounds.maxX, a.x - nx * halfPush))
+        const nextAz = Math.max(map.movementBounds.minZ, Math.min(map.movementBounds.maxZ, a.z - nz * halfPush))
+        const nextBx = Math.max(map.movementBounds.minX, Math.min(map.movementBounds.maxX, b.x + nx * halfPush))
+        const nextBz = Math.max(map.movementBounds.minZ, Math.min(map.movementBounds.maxZ, b.z + nz * halfPush))
+
+        if (isAreaFree(nextAx, a.y, nextAz, a.radius, a.height, extraSolids, map)) {
+          a.x = nextAx
+          a.z = nextAz
+        }
+        if (isAreaFree(nextBx, b.y, nextBz, b.radius, b.height, extraSolids, map)) {
+          b.x = nextBx
+          b.z = nextBz
+        }
+      }
+    }
+  }
+}
+
+// ── 3D Ballistic Grenade Physics with Wall/Floor Bounce ──────────────────
+
+export interface GrenadeKinematic {
+  readonly x: number
+  readonly y: number
+  readonly z: number
+  readonly vx: number
+  readonly vy: number
+  readonly vz: number
+}
+
+export function stepGrenadeMotion(
+  g: GrenadeKinematic,
+  dt: number,
+  extraSolids: ReadonlyArray<MapBox>,
+  map = MAPS.bellYard
+): { readonly next: GrenadeKinematic; readonly bounced: boolean } {
+  const radius = 0.14
+  const restitution = 0.44
+  let vx = g.vx
+  let vy = g.vy - PLAYER_GRAVITY * dt
+  let vz = g.vz
+
+  const tx = g.x + vx * dt
+  const ty = g.y + vy * dt
+  const tz = g.z + vz * dt
+
+  const hit = sweepSegmentVsWorld(g.x, g.y, g.z, tx, ty, tz, radius, extraSolids, map)
+  let x = tx
+  let y = ty
+  let z = tz
+  let bounced = false
+
+  if (hit !== null) {
+    const safeT = Math.max(0, hit.t - 0.02)
+    x = g.x + (tx - g.x) * safeT
+    y = g.y + (ty - g.y) * safeT
+    z = g.z + (tz - g.z) * safeT
+
+    const vn = vx * hit.nx + vy * hit.ny + vz * hit.nz
+    if (vn < 0) {
+      vx -= (1 + restitution) * vn * hit.nx
+      vy -= (1 + restitution) * vn * hit.ny
+      vz -= (1 + restitution) * vn * hit.nz
+      if (Math.abs(hit.ny) > 0.5) {
+        vx *= 0.84
+        vz *= 0.84
+        if (Math.abs(vy) < 0.7) vy = 0
+      } else {
+        vx *= 0.78
+        vz *= 0.78
+      }
+      bounced = Math.abs(vn) > 1.4
+    }
+  }
+
+  if (y < radius) {
+    y = radius
+    if (vy < -1.2) {
+      vy = -vy * restitution
+      bounced = true
+    } else {
+      vy = 0
+    }
+    vx *= 0.88
+    vz *= 0.88
+  }
+
+  x = Math.max(map.propBounds.minX, Math.min(map.propBounds.maxX, x))
+  z = Math.max(map.propBounds.minZ, Math.min(map.propBounds.maxZ, z))
+
+  return { next: { x, y, z, vx, vy, vz }, bounced }
+}

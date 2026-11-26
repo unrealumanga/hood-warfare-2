@@ -1,5 +1,7 @@
 import type { MapId } from "./maps.ts"
 import { Clock, Descriptor, Random, Schema } from "@typeonce/ritmo"
+import type { BotBrainState } from "./botAi.ts"
+import type { BloomState, RecoilState } from "./gunplay.ts"
 import {
   TICK_HZ,
   type ArmorId,
@@ -29,15 +31,19 @@ export interface PlayerInput {
   readonly yaw: number
   readonly pitch: number
   readonly crouch?: boolean
+  readonly ads?: boolean
   readonly jump: boolean
   readonly fire: boolean
   readonly reload: boolean
-  readonly switchSlot: 0 | 1 | 2 // 0 = no change, 1 = primary, 2 = sidearm
+  readonly switchSlot: 0 | 1 | 2 | 3 // 0 = no change, 1 = primary, 2 = sidearm, 3 = commando knife
   // Discrete milestone action edges (deduplicated via actionId!)
   readonly sketchAction?: SketchActionInput | null
   readonly eraseActionId?: number
   readonly parryActionId?: number
   readonly smokeActionId?: number
+  readonly grenadeActionId?: number
+  readonly satchelActionId?: number
+  readonly meleeActionId?: number
   readonly grappleActionId?: number
   readonly grappleReleaseId?: number
 }
@@ -49,6 +55,7 @@ export const EMPTY_INPUT: PlayerInput = {
   yaw: 0,
   pitch: 0,
   crouch: false,
+  ads: false,
   jump: false,
   fire: false,
   reload: false,
@@ -57,8 +64,37 @@ export const EMPTY_INPUT: PlayerInput = {
   eraseActionId: 0,
   parryActionId: 0,
   smokeActionId: 0,
+  grenadeActionId: 0,
+  satchelActionId: 0,
+  meleeActionId: 0,
   grappleActionId: 0,
   grappleReleaseId: 0
+}
+
+export interface GrenadeData {
+  readonly id: number
+  readonly ownerSlot: number
+  readonly crew: CrewId
+  readonly x: number
+  readonly y: number
+  readonly z: number
+  readonly vx: number
+  readonly vy: number
+  readonly vz: number
+  readonly fuseTicksLeft: number
+}
+
+export interface SatchelData {
+  readonly id: number
+  readonly ownerSlot: number
+  readonly crew: CrewId
+  readonly x: number
+  readonly y: number
+  readonly z: number
+  readonly nx: number
+  readonly ny: number
+  readonly nz: number
+  readonly armedTicks: number
 }
 
 // ── Dynamic World Constructs & Milestone Entities ────────────────────────
@@ -196,6 +232,7 @@ export interface FighterData {
   readonly pitch: number
   readonly grounded: boolean
   readonly crouching: boolean
+  readonly ads: boolean
 
   // Combat vitals & state
   readonly alive: boolean
@@ -209,7 +246,7 @@ export interface FighterData {
   readonly deaths: number
 
   // Active & next-spawn loadout + cosmetics
-  readonly activeSlot: 1 | 2
+  readonly activeSlot: 1 | 2 | 3
   readonly primaryGun: PrimaryGunId
   readonly armorType: ArmorId
   readonly nextPrimaryGun: PrimaryGunId
@@ -217,18 +254,25 @@ export interface FighterData {
   readonly cosmetics: CosmeticLoadout
   readonly nextCosmetics: CosmeticLoadout
 
-  // Ammo & weapon timers (integer ticks)
+  // Ammo, recoil, bloom & weapon timers (integer ticks)
   readonly primaryAmmo: number
   readonly sidearmAmmo: number
   readonly fireCooldownTicks: number
   readonly reloadTicksLeft: number
   readonly wasFireHeld: boolean
+  readonly recoil: RecoilState
+  readonly bloom: BloomState
+  readonly flinchTicksLeft: number
 
-  // Milestone 1-9 per-fighter abilities & deduplication
+  // Milestone 1-9 + Tactical Combat abilities & deduplication
   readonly sketchCharges: number
   readonly parryTicksLeft: number
   readonly parryCooldownTicks: number
   readonly smokeCooldownTicks: number
+  readonly grenadeCooldownTicks: number
+  readonly satchelCooldownTicks: number
+  readonly meleeTicksLeft: number
+  readonly meleeCooldownTicks: number
   readonly grappleCooldownTicks: number
   readonly grapple: GrappleActiveState | null
   readonly carryingScrap: number
@@ -237,15 +281,19 @@ export interface FighterData {
   readonly lastHandledEraseId: number
   readonly lastHandledParryId: number
   readonly lastHandledSmokeId: number
+  readonly lastHandledGrenadeId: number
+  readonly lastHandledSatchelId: number
+  readonly lastHandledMeleeId: number
   readonly lastHandledGrappleId: number
   readonly lastHandledGrappleReleaseId: number
 
-  // Sequenced client input reconciliation
+  // Sequenced client input reconciliation & tactical Bot AI brain
   readonly lastInputSeq: number
   readonly botStrafeDir: number
   readonly botStrafeTicks: number
-  readonly botWp: number // waypoint the bot is currently heading for (-1 = none); kept until reached so it cannot flip-flop
-  readonly botWpTicks: number // ticks left before the bot gives up on botWp and re-plans
+  readonly botWp: number
+  readonly botWpTicks: number
+  readonly brain: BotBrainState
 }
 
 export interface ProjectileData {
@@ -308,8 +356,12 @@ export interface MatchStateData {
   readonly nextEventSeq: number
   readonly nextConstructId: number
   readonly nextSmokeId: number
+  readonly nextGrenadeId: number
+  readonly nextSatchelId: number
   readonly constructs: ReadonlyArray<ConstructData>
   readonly smokeClouds: ReadonlyArray<SmokeCloudData>
+  readonly grenades: ReadonlyArray<GrenadeData>
+  readonly satchels: ReadonlyArray<SatchelData>
   readonly props: ReadonlyArray<MovablePropData>
   readonly cableCar: CableCarData
   readonly foreman: ForemanData | null
@@ -342,7 +394,14 @@ export type MatchEventKind =
   | "sketchExpire"
   | "parry"
   | "smokeDeploy"
+  | "grenadeThrow"
+  | "grenadeBounce"
+  | "grenadeBlast"
+  | "satchelPlant"
+  | "satchelBlast"
+  | "barrelHit"
   | "barrelBlast"
+  | "knifeSlash"
   | "grapple"
   | "foremanWindup"
   | "foremanStagger"

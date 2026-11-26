@@ -1,11 +1,14 @@
 import { Clock, Ops, Random } from "@typeonce/ritmo"
 import {
+  ADS_SPEED_MULT,
+  ALLY_BOT_LEVEL,
   ANOMALY_CYCLE_TICKS,
   ANOMALY_DURATION_TICKS,
   ARMORS,
   ARM_LATERAL,
   BARREL_BLAST_DAMAGE,
-  ALLY_BOT_LEVEL,
+  BARREL_BLAST_RADIUS,
+  BARREL_MAX_HP,
   BOSS_ARMOR,
   BOSS_GUN,
   BOSS_HP,
@@ -13,50 +16,57 @@ import {
   BOSS_MODES,
   BOSS_NAME,
   BOSS_SCALE,
+  BOSS_SCORE_MODES,
   BOSS_SKILL_BONUS,
   BOSS_SPAWN_TICK,
-  BOSS_SCORE_MODES,
-  BOT_SEEK_HEALTH_HP,
-  BOT_WP_PATIENCE_TICKS,
-  MULTI_MAP_MODES,
-  DIFFICULTY_KILLS_PER_STEP,
-  HEALTH_PICKUP_ARMOR,
-  HEALTH_PICKUP_HEAL,
-  HEALTH_PICKUP_MODES,
-  HEALTH_PICKUP_RADIUS,
-  HEALTH_PICKUP_RESPAWN_TICKS,
-  botSkill,
-  sanitizeDifficulty,
-  DIFFICULTY_MAX,
-  DIFFICULTY_MIN,
-  HEALTH_PICKUP_FIRST_SPAWN_TICKS,
-  botCosmetics,
-  HEAD_BYPASSES_ARMOR,
-  HEAD_MIN_Y,
-  HIT_ZONE_MULT,
-  LEG_MAX_Y,
-  type HitZone,
-  BARREL_BLAST_RADIUS,
   BOT_NAMES,
   DEFAULT_COSMETICS,
   DEFAULT_LOADOUT,
+  DIFFICULTY_KILLS_PER_STEP,
+  DIFFICULTY_MAX,
+  DIFFICULTY_MIN,
   FOUNDRY_TARGET_SCRAP,
   GRAPPLE_COOLDOWN_TICKS,
   GRAPPLE_MAX_TICKS,
   GRAPPLE_PULL_SPEED,
   GRAPPLE_RANGE,
+  GRENADE_BLAST_DAMAGE,
+  GRENADE_BLAST_RADIUS,
+  GRENADE_COOLDOWN_TICKS,
+  GRENADE_FUSE_TICKS,
+  GRENADE_THROW_SPEED,
   GUNS,
+  HEAD_BYPASSES_ARMOR,
+  HEAD_MIN_Y,
+  HEALTH_PICKUP_ARMOR,
+  HEALTH_PICKUP_FIRST_SPAWN_TICKS,
+  HEALTH_PICKUP_HEAL,
+  HEALTH_PICKUP_MODES,
+  HEALTH_PICKUP_RADIUS,
+  HEALTH_PICKUP_RESPAWN_TICKS,
+  HIT_ZONE_MULT,
+  KNIFE_COOLDOWN_TICKS,
+  KNIFE_DAMAGE_BACKSTAB,
+  KNIFE_DAMAGE_FRONT,
+  KNIFE_RANGE,
+  KNIFE_SWING_TICKS,
+  LEG_MAX_Y,
   MATCH_DURATION_TICKS,
+  MULTI_MAP_MODES,
   MURAL_ROTATE_TICKS,
   PARRY_COOLDOWN_TICKS,
   PARRY_WINDOW_TICKS,
-  PLAYER_CROUCH_HEIGHT,
   PLAYER_CROUCH_EYE_HEIGHT,
+  PLAYER_CROUCH_HEIGHT,
   PLAYER_EYE_HEIGHT,
   PLAYER_HEIGHT,
   PLAYER_MAX_HP,
   PLAYER_RADIUS,
   RESPAWN_TICKS,
+  SATCHEL_BLAST_DAMAGE,
+  SATCHEL_BLAST_RADIUS,
+  SATCHEL_COOLDOWN_TICKS,
+  SATCHEL_PLANT_RANGE,
   SCORE_TO_WIN,
   SKETCH_BARRICADE_LIFETIME_TICKS,
   SKETCH_ERASE_RANGE,
@@ -67,27 +77,40 @@ import {
   SMOKE_CLEAR_TICKS,
   SMOKE_COOLDOWN_TICKS,
   SMOKE_LIFETIME_TICKS,
+  SNIPER_ADS_SPEED_MULT,
   TICK_HZ,
+  botCosmetics,
   sanitizeCosmetics,
+  sanitizeDifficulty,
   sanitizeLoadout,
   type CrewId,
   type GameModeId,
   type GunId,
+  type HitZone,
   type PrimaryGunId
 } from "./data.ts"
+import { computeBotDecision, makeInitialBotBrain, type BotHazard } from "./botAi.ts"
 import {
-  findNearestWaypoint,
-  muralWaypointId,
-  nextWaypointToward,
-  type MapBox
-} from "./map.ts"
+  NO_BLOOM,
+  NO_RECOIL,
+  bloomOnShot,
+  bloomStep,
+  currentSpreadRad,
+  recoilOnShot,
+  recoilStep,
+  resolveWeaponHitDamage
+} from "./gunplay.ts"
+import { type MapBox } from "./map.ts"
 import { MAPS, sanitizeMapId, type MapDef, type MapId } from "./maps.ts"
 import {
   hasLineOfSight,
   resolveCrouching,
+  resolveFighterBodyCollisions,
+  stepGrenadeMotion,
   stepPlayerMovement,
   sweepSegmentVsCapsule,
-  sweepSegmentVsWorld
+  sweepSegmentVsWorld,
+  type BodyCollider
 } from "./physics.ts"
 import {
   EMPTY_INPUT,
@@ -107,18 +130,25 @@ import {
   type FighterData,
   type ForemanData,
   type FoundryData,
+  type GrenadeData,
   type InitialHumanSpec,
   type MatchEventItem,
   type MatchStateData,
   type MovablePropData,
   type PlayerInput,
+  type SatchelData,
   type SmokeCloudData
 } from "./schema.ts"
 
 const DT = 1 / TICK_HZ
 const MAX_PITCH = 1.42
 const MAX_FEED_EVENTS = 64
-const STANDARD_BOT_PRIMARIES: ReadonlyArray<PrimaryGunId> = ["rollerSmg", "broadside", "linecaster"]
+const STANDARD_BOT_PRIMARIES: ReadonlyArray<PrimaryGunId> = [
+  "rollerSmg",
+  "broadside",
+  "linecaster",
+  "pressSniper"
+]
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v
@@ -161,7 +191,7 @@ function initialProps(map: MapDef): ReadonlyArray<MovablePropData> {
     vx: 0,
     vy: 0,
     vz: 0,
-    hp: 40,
+    hp: BARREL_MAX_HP,
     exploded: false,
     respawnTicksLeft: 0
   }))
@@ -288,8 +318,12 @@ export function makeDefaultMatchState(
     nextEventSeq: 1,
     nextConstructId: 1,
     nextSmokeId: 1,
+    nextGrenadeId: 1,
+    nextSatchelId: 1,
     constructs: [],
     smokeClouds: [],
+    grenades: [],
+    satchels: [],
     props: initialProps(map),
     cableCar: initialCableCar(map),
     foreman: initialForeman(mode, map),
@@ -359,6 +393,7 @@ function makeFighterForSlot(
     pitch: 0,
     grounded: true,
     crouching: false,
+    ads: false,
     alive: true,
     hp: PLAYER_MAX_HP,
     maxHp: PLAYER_MAX_HP,
@@ -380,10 +415,17 @@ function makeFighterForSlot(
     fireCooldownTicks: 0,
     reloadTicksLeft: 0,
     wasFireHeld: false,
+    recoil: NO_RECOIL,
+    bloom: NO_BLOOM,
+    flinchTicksLeft: 0,
     sketchCharges: SKETCH_MAX_CHARGES,
     parryTicksLeft: 0,
     parryCooldownTicks: 0,
     smokeCooldownTicks: 0,
+    grenadeCooldownTicks: 0,
+    satchelCooldownTicks: 0,
+    meleeTicksLeft: 0,
+    meleeCooldownTicks: 0,
     grappleCooldownTicks: 0,
     grapple: null,
     carryingScrap: 0,
@@ -392,18 +434,18 @@ function makeFighterForSlot(
     lastHandledEraseId: 0,
     lastHandledParryId: 0,
     lastHandledSmokeId: 0,
+    lastHandledGrenadeId: 0,
+    lastHandledSatchelId: 0,
+    lastHandledMeleeId: 0,
     lastHandledGrappleId: 0,
     lastHandledGrappleReleaseId: 0,
     lastInputSeq: 0,
     botStrafeDir: slotId % 2 === 0 ? 1 : -1,
     botStrafeTicks: 40 + (slotId % 7) * 13,
     botWp: -1,
-    botWpTicks: 0
+    botWpTicks: 0,
+    brain: makeInitialBotBrain(slotId, spawn.x, spawn.z)
   }
-}
-
-function activeGunId(f: FighterData): GunId {
-  return f.activeSlot === 1 ? f.primaryGun : "proofPistol"
 }
 
 function pushEvent(
@@ -683,6 +725,7 @@ export const HandleIntents = Game.System(
               yaw: intent.input.yaw,
               pitch: clamp(intent.input.pitch, -MAX_PITCH, MAX_PITCH),
               crouch: Boolean(intent.input.crouch),
+              ads: Boolean(intent.input.ads),
               jump: intent.input.jump,
               fire: intent.input.fire,
               reload: intent.input.reload,
@@ -691,6 +734,9 @@ export const HandleIntents = Game.System(
               eraseActionId: intent.input.eraseActionId ?? 0,
               parryActionId: intent.input.parryActionId ?? 0,
               smokeActionId: intent.input.smokeActionId ?? 0,
+              grenadeActionId: intent.input.grenadeActionId ?? 0,
+              satchelActionId: intent.input.satchelActionId ?? 0,
+              meleeActionId: intent.input.meleeActionId ?? 0,
               grappleActionId: intent.input.grappleActionId ?? 0,
               grappleReleaseId: intent.input.grappleReleaseId ?? 0
             }
@@ -861,9 +907,21 @@ export const RunBotAI = Game.System(
       }
     }
 
-    const defaultGoalWpId = muralWaypointId(match.activeMuralId, map.waypoints)
-    const activeZone = map.muralZones[match.activeMuralId]!
-    const pickupLive = match.healthPickup.available
+    const allFighterData = fighters.map((e) => e.data)
+    const liveHazards: Array<BotHazard> = [
+      ...match.grenades.map((g) => ({
+        x: g.x,
+        y: g.y,
+        z: g.z,
+        radius: GRENADE_BLAST_RADIUS + 0.8
+      })),
+      ...match.satchels.map((s) => ({
+        x: s.x,
+        y: s.y,
+        z: s.z,
+        radius: SATCHEL_BLAST_RADIUS + 0.4
+      }))
+    ]
 
     for (const entry of fighters) {
       const bot = entry.data
@@ -875,188 +933,52 @@ export const RunBotAI = Game.System(
         continue
       }
 
-      let strafeDir = bot.botStrafeDir
-      let strafeTicks = bot.botStrafeTicks - 1
-      if (strafeTicks <= 0) {
-        strafeDir = random.next() < 0.5 ? -1 : 1
-        strafeTicks = 45 + Math.floor(random.next() * 55)
-        queries.fighters.data.fighter.set(entry.entity, {
-          ...bot,
-          botStrafeDir: strafeDir,
-          botStrafeTicks: strafeTicks
-        })
-      }
+      const skillLevel = bot.isBoss
+        ? match.difficulty + BOSS_SKILL_BONUS
+        : bot.crew === 1
+          ? match.difficulty
+          : ALLY_BOT_LEVEL
 
-      // 1. Find closest visible opposing fighter (respecting constructs AND Ink Smoke density grid!)
-      let target: FighterData | null = null
-      let bestTargetDist = 28
-      const eyeY = bot.y + PLAYER_EYE_HEIGHT
-      for (const otherEntry of fighters) {
-        const other = otherEntry.data
-        if (!other.alive || other.crew === bot.crew) continue
-        const dx = other.x - bot.x
-        const dy = other.y + (other.crouching && !other.isBoss ? 0.65 * PLAYER_CROUCH_HEIGHT : 1.1) - eyeY
-        const dz = other.z - bot.z
-        const dist = Ops.hypot(Ops.hypot(dx, dz), dy)
-        if (dist < bestTargetDist) {
-          if (
-            hasLineOfSight(
-              bot.x,
-              eyeY,
-              bot.z,
-              other.x,
-              other.y + (other.crouching && !other.isBoss ? 0.65 * PLAYER_CROUCH_HEIGHT : 1.15),
-              other.z,
-              dynamicSolids,
-              match.smokeClouds,
-              map
-            )
-          ) {
-            bestTargetDist = dist
-            target = other
-          }
-        }
-      }
+      const decision = computeBotDecision({
+        bot,
+        allFighters: allFighterData,
+        map,
+        mode: match.mode,
+        activeMuralId: match.activeMuralId,
+        healthPickup: match.healthPickup,
+        extractionUnlocked: Boolean(match.extraction?.vaultUnlocked),
+        foundryPiles: match.foundry?.piles ?? [],
+        dynamicSolids,
+        dynamicEdges,
+        smokeClouds: match.smokeClouds,
+        hazards: liveHazards,
+        skillLevel,
+        random
+      })
 
-      // 2. Mode-aware objective waypoint (Mural / Extraction guard / Foundry scrap & deposit)
-      let goalWpId = defaultGoalWpId
-      if (match.mode === "extraction") {
-        goalWpId = match.extraction?.vaultUnlocked
-          ? (map.id === "bellYard" ? 20 : findNearestWaypoint(map.extractionExit.x, map.extractionExit.y, map.extractionExit.z, map.waypoints))
-          : (map.id === "bellYard" ? 12 : findNearestWaypoint(map.extractionVault.x, map.extractionVault.y, map.extractionVault.z, map.waypoints))
-      } else if (match.mode === "foundry" && match.foundry) {
-        if (bot.carryingScrap > 0) {
-          goalWpId = findNearestWaypoint(map.foundryCenter.x, map.foundryCenter.y, map.foundryCenter.z, map.waypoints)
-        } else {
-          const openPile = match.foundry.piles.find((p) => p.available)
-          goalWpId = openPile ? findNearestWaypoint(openPile.x, openPile.y, openPile.z, map.waypoints)
-            : findNearestWaypoint(map.foundryCenter.x, map.foundryCenter.y, map.foundryCenter.z, map.waypoints)
-        }
-      }
-
-      if (bot.isBoss) {
-        // The boss hunts the closest living opponent instead of holding the objective
-        let huntDist = 1e9
-        for (const otherEntry of fighters) {
-          const other = otherEntry.data
-          if (!other.alive || other.crew === bot.crew) continue
-          const d = Ops.hypot(other.x - bot.x, other.z - bot.z)
-          if (d < huntDist) {
-            huntDist = d
-            goalWpId = findNearestWaypoint(other.x, other.y, other.z, map.waypoints)
-          }
-        }
-      } else if (pickupLive && bot.hp < BOT_SEEK_HEALTH_HP) {
-        goalWpId = findNearestWaypoint(match.healthPickup.x, match.healthPickup.y, match.healthPickup.z, map.waypoints)
-      }
-
-      // Keep walking to the chosen waypoint until it is reached (or patience runs out): re-picking the nearest
-      // waypoint every tick made bots on stairs flip back to the ground and never climb.
-      let heading = bot.botWp
-      let headingTicks = bot.botWpTicks
-      if (heading >= 0 && headingTicks > 0) {
-        const hw = map.waypoints[heading]!
-        const hd = Ops.hypot(Ops.hypot(hw.x - bot.x, hw.z - bot.z), hw.y - bot.y)
-        if (hd <= 0.9) heading = -1
-        else headingTicks -= 1
-      } else {
-        heading = -1
-      }
-      if (heading < 0) {
-        const curWpId = findNearestWaypoint(bot.x, bot.y, bot.z, map.waypoints)
-        heading = nextWaypointToward(curWpId, goalWpId, dynamicEdges, map.waypoints)
-        headingTicks = BOT_WP_PATIENCE_TICKS
-      }
-      const nextWpId = heading
-      const nextWp = map.waypoints[nextWpId]!
-      if (heading !== bot.botWp || headingTicks !== bot.botWpTicks) {
-        const latest = queries.fighters.data.fighter.get(entry.entity)
-        queries.fighters.data.fighter.set(entry.entity, { ...latest, botWp: heading, botWpTicks: headingTicks })
-      }
-      // The mural patrol must not override the boss hunt or a wounded bot going for the booster
-      const insideZone =
-        match.mode === "mural" &&
-        !bot.isBoss &&
-        !(pickupLive && bot.hp < BOT_SEEK_HEALTH_HP) &&
-        isInsideMuralZone(bot, match.activeMuralId, map)
-
-      let navX = nextWp.x
-      let navZ = nextWp.z
-      if (insideZone) {
-        navX = activeZone.x + strafeDir * 1.8
-        navZ = activeZone.z + (bot.slotId % 2 === 0 ? 1.2 : -1.2)
-      }
-
-      const moveDx = navX - bot.x
-      const moveDz = navZ - bot.z
-      const moveDist = Ops.hypot(moveDx, moveDz)
-      const navYaw = moveDist > 0.25 ? Ops.atan2(-moveDx, -moveDz) : bot.yaw
-
-      let aimYaw = navYaw
-      let aimPitch = 0
-      let fire = false
-      let moveForward = moveDist > 0.65 ? 1 : 0
-      let moveRight = 0
-      let reload = false
-      let switchSlot: 0 | 1 | 2 = 0
-
-      if (target !== null) {
-        const dx = target.x - bot.x
-        const dy = target.y + (target.crouching && !target.isBoss ? 0.65 * PLAYER_CROUCH_HEIGHT : 1.15) - eyeY
-        const dz = target.z - bot.z
-        const horiz = Math.max(0.01, Ops.hypot(dx, dz))
-        // Skill: red bots follow the match difficulty (the boss plays above it), allies stay at a fixed level
-        const skill = botSkill(
-          bot.isBoss ? match.difficulty + BOSS_SKILL_BONUS : bot.crew === 1 ? match.difficulty : ALLY_BOT_LEVEL
-        )
-        const jitterYaw = (random.next() - 0.5) * skill.jitterYaw
-        const jitterPitch = (random.next() - 0.5) * skill.jitterPitch
-        aimYaw = Ops.atan2(-dx, -dz) + jitterYaw
-        aimPitch = clamp(Ops.atan2(dy, horiz) + jitterPitch, -0.9, 0.9)
-
-        const gun = GUNS[activeGunId(bot)]
-        const maxRange = (gun.id === "broadside" ? 13 : 26) * skill.rangeScale
-        if (bestTargetDist <= maxRange && random.next() < skill.fireChance) {
-          fire = gun.automatic ? true : !bot.wasFireHeld
-        }
-
-        const sinY = Ops.sin(aimYaw)
-        const cosY = Ops.cos(aimYaw)
-        const fwdX = -sinY
-        const fwdZ = -cosY
-        const rightX = cosY
-        const rightZ = -sinY
-
-        if (insideZone) {
-          moveForward = bestTargetDist > 12 ? 0.5 : bestTargetDist < 4 ? -0.5 : 0
-          moveRight = strafeDir * 0.85
-        } else if (moveDist > 0.4) {
-          const ux = moveDx / moveDist
-          const uz = moveDz / moveDist
-          moveForward = clamp(ux * fwdX + uz * fwdZ, -1, 1)
-          moveRight = clamp(ux * rightX + uz * rightZ + strafeDir * 0.35, -1, 1)
-        }
-      }
-
-      const ammo = bot.activeSlot === 1 ? bot.primaryAmmo : bot.sidearmAmmo
-      if (ammo <= 0 && bot.reloadTicksLeft === 0) {
-        reload = true
-      } else if (bot.activeSlot === 2 && bot.primaryAmmo > 0 && target === null) {
-        switchSlot = 1
-      }
-
-      const jump = bot.grounded && nextWp.y > bot.y + 0.35 && random.next() < 0.04
+      queries.fighters.data.fighter.set(entry.entity, {
+        ...bot,
+        botStrafeDir: decision.nextBrain.strafeDir,
+        botStrafeTicks: decision.nextBrain.strafeTicks,
+        botWp: decision.nextBrain.targetWp,
+        botWpTicks: decision.nextBrain.wpPatienceTicks,
+        brain: decision.nextBrain
+      })
 
       bySlot[bot.slotId] = {
         ...EMPTY_INPUT,
-        moveForward,
-        moveRight,
-        yaw: aimYaw,
-        pitch: aimPitch,
-        jump,
-        fire,
-        reload,
-        switchSlot
+        moveForward: decision.moveForward,
+        moveRight: decision.moveRight,
+        yaw: decision.yaw,
+        pitch: decision.pitch,
+        crouch: decision.crouch,
+        ads: decision.ads,
+        jump: decision.jump,
+        fire: decision.fire,
+        reload: decision.reload,
+        switchSlot: decision.switchSlot,
+        grenadeActionId: decision.triggerGrenade ? bot.lastHandledGrenadeId + 1 : 0,
+        meleeActionId: decision.triggerMelee ? bot.lastHandledMeleeId + 1 : 0
       }
     }
 
@@ -1101,10 +1023,15 @@ export const StepCombatAndMatch = Game.System(
     let nextShotEventId = matchPrev.nextShotEventId
     let nextConstructId = matchPrev.nextConstructId
     let nextSmokeId = matchPrev.nextSmokeId
+    let nextGrenadeId = matchPrev.nextGrenadeId
+    let nextSatchelId = matchPrev.nextSatchelId
     let healthPickup = matchPrev.healthPickup
     let bossSlot = matchPrev.bossSlot
     let bossDefeated = matchPrev.bossDefeated
     let bossDownCrew: CrewId | null = null
+    let foreman = matchPrev.foreman
+    const grenades: Array<GrenadeData> = [...matchPrev.grenades]
+    const satchels: Array<SatchelData> = [...matchPrev.satchels]
 
     const inputsBySlot = resources.inputs.get().bySlot
     const fighterEntries = queries.fighters.each().map((entity) => ({
@@ -1194,7 +1121,7 @@ export const StepCombatAndMatch = Game.System(
             vx: 0,
             vy: 0,
             vz: 0,
-            hp: 40,
+            hp: BARREL_MAX_HP,
             exploded: false,
             respawnTicksLeft: 0
           }
@@ -1212,6 +1139,365 @@ export const StepCombatAndMatch = Game.System(
       }
       return p
     })
+
+    // Shared combat helpers (used by projectiles, melee knife, grenades, C4 satchels, barrels & Foreman)
+    const applyDamageToFighter = (
+      targetIdx: number,
+      rawDamage: number,
+      actorSlot: number,
+      gunId: GunId | null,
+      shotEventId: number,
+      hitX: number,
+      hitY: number,
+      hitZ: number,
+      zone: HitZone = "torso",
+      preScaled = false
+    ) => {
+      const targetEntry = fighterEntries[targetIdx]!
+      const victim = targetEntry.data
+      if (!victim.alive) return
+      const damage = preScaled
+        ? Math.max(1, Math.round(rawDamage))
+        : Math.max(1, Math.round(rawDamage * HIT_ZONE_MULT[zone]))
+      const eventZone = zone === "torso" ? undefined : zone
+      const prevArmor = zone === "head" && HEAD_BYPASSES_ARMOR ? 0 : victim.armor
+      const absorbed = Math.min(prevArmor, damage)
+      const nextArmor = victim.armor - absorbed
+      const overflow = damage - absorbed
+      const nextHp = Math.max(0, victim.hp - overflow)
+      const brokeArmor = prevArmor > 0 && nextArmor === 0
+
+      if (brokeArmor) {
+        nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+          kind: "armorBreak",
+          shotEventId,
+          actorSlot,
+          targetSlot: victim.slotId,
+          gunId,
+          x: hitX,
+          y: hitY,
+          z: hitZ,
+          damage,
+          zone: eventZone
+        })
+      }
+
+      if (nextHp <= 0) {
+        targetEntry.data = {
+          ...victim,
+          hp: 0,
+          armor: 0,
+          alive: false,
+          ads: false,
+          recoil: NO_RECOIL,
+          bloom: NO_BLOOM,
+          flinchTicksLeft: 0,
+          respawnTicksLeft: RESPAWN_TICKS,
+          deaths: victim.deaths + 1,
+          reloadTicksLeft: 0,
+          grapple: null,
+          carryingScrap: 0
+        }
+        const killerEntry = fighterEntries.find((e) => e.data.slotId === actorSlot)
+        if (killerEntry && killerEntry.data.slotId !== victim.slotId) {
+          killerEntry.data = { ...killerEntry.data, kills: killerEntry.data.kills + 1 }
+        }
+        nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+          kind: "elim",
+          shotEventId,
+          actorSlot,
+          targetSlot: victim.slotId,
+          gunId,
+          x: hitX,
+          y: hitY,
+          z: hitZ,
+          damage,
+          zone: eventZone
+        })
+        if (victim.isBoss) {
+          bossDefeated = true
+          const killerCrew =
+            killerEntry && killerEntry.data.slotId !== victim.slotId ? killerEntry.data.crew : null
+          bossDownCrew = killerCrew
+          nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+            kind: "bossDown",
+            shotEventId,
+            actorSlot,
+            targetSlot: victim.slotId,
+            gunId,
+            x: hitX,
+            y: hitY,
+            z: hitZ,
+            damage: BOSS_KILL_SCORE
+          })
+        }
+      } else {
+        targetEntry.data = {
+          ...victim,
+          hp: nextHp,
+          armor: nextArmor,
+          flinchTicksLeft: 10
+        }
+        nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+          kind: "hit",
+          shotEventId,
+          actorSlot,
+          targetSlot: victim.slotId,
+          gunId,
+          x: hitX,
+          y: hitY,
+          z: hitZ,
+          damage,
+          zone: eventZone
+        })
+      }
+    }
+
+    const detonateArea = (
+      cx: number,
+      cy: number,
+      cz: number,
+      radius: number,
+      maxDamage: number,
+      actorSlot: number,
+      gunId: GunId | null,
+      shotEventId: number,
+      blastKind: "barrelBlast" | "grenadeBlast" | "satchelBlast",
+      targetId: number | null,
+      destroyConstructs: boolean
+    ) => {
+      clearSmokeInSphere(smokeClouds, cx, cy, cz, radius)
+      nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+        kind: blastKind,
+        shotEventId,
+        actorSlot,
+        targetSlot: targetId,
+        gunId,
+        x: cx,
+        y: cy,
+        z: cz,
+        damage: maxDamage
+      })
+
+      for (let fi = 0; fi < fighterEntries.length; fi++) {
+        const ft = fighterEntries[fi]!.data
+        if (!ft.alive) continue
+        const dist = Ops.hypot(Ops.hypot(ft.x - cx, ft.z - cz), ft.y + 0.85 - cy)
+        if (dist <= radius) {
+          const splash = Math.round(maxDamage * (1 - dist / (radius + 0.5)))
+          if (splash > 0) {
+            applyDamageToFighter(fi, splash, actorSlot, gunId, shotEventId, ft.x, ft.y + 1, ft.z)
+          }
+        }
+      }
+
+      if (destroyConstructs) {
+        const actorEntry = fighterEntries.find((e) => e.data.slotId === actorSlot)
+        for (let ci = constructs.length - 1; ci >= 0; ci--) {
+          const c = constructs[ci]!
+          if (actorEntry && c.crew === actorEntry.data.crew) continue
+          const d = distPointToBox(cx, cy, cz, c)
+          if (d <= radius * 0.9) {
+            const removed = constructs.splice(ci, 1)[0]!
+            const ownerEntry = fighterEntries.find((e) => e.data.slotId === removed.ownerSlot)
+            if (ownerEntry) {
+              ownerEntry.data = {
+                ...ownerEntry.data,
+                sketchCharges: Math.min(SKETCH_MAX_CHARGES, ownerEntry.data.sketchCharges + 1)
+              }
+            }
+            nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+              kind: "sketchExpire",
+              shotEventId: 0,
+              actorSlot,
+              targetSlot: removed.id,
+              gunId: null,
+              x: (removed.minX + removed.maxX) * 0.5,
+              y: removed.maxY,
+              z: (removed.minZ + removed.maxZ) * 0.5,
+              damage: 0
+            })
+          }
+        }
+      }
+
+      // Chain-detonate any live explosive barrels caught inside the blast wave!
+      for (let pi = 0; pi < props.length; pi++) {
+        const p = props[pi]!
+        if (p.exploded) continue
+        const d = Ops.hypot(Ops.hypot(p.x - cx, p.z - cz), p.y + 0.5 - cy)
+        if (d <= radius + 0.55) {
+          props[pi] = { ...p, hp: 0, exploded: true, respawnTicksLeft: 900, vx: 0, vz: 0 }
+          detonateArea(
+            p.x,
+            p.y + 0.6,
+            p.z,
+            BARREL_BLAST_RADIUS,
+            BARREL_BLAST_DAMAGE,
+            actorSlot,
+            gunId,
+            shotEventId,
+            "barrelBlast",
+            p.id,
+            false
+          )
+        }
+      }
+    }
+
+    const performKnifeSlash = (attackerIdx: number, aimYaw: number, aimPitch: number) => {
+      const attackerEntry = fighterEntries[attackerIdx]!
+      let attacker = attackerEntry.data
+      if (!attacker.alive || attacker.meleeCooldownTicks > 0) return
+
+      attacker = {
+        ...attacker,
+        meleeTicksLeft: KNIFE_SWING_TICKS,
+        meleeCooldownTicks: KNIFE_COOLDOWN_TICKS,
+        parryTicksLeft: Math.max(attacker.parryTicksLeft, PARRY_WINDOW_TICKS)
+      }
+      attackerEntry.data = attacker
+
+      const sinY = Ops.sin(aimYaw)
+      const cosY = Ops.cos(aimYaw)
+      const cosP = Ops.cos(aimPitch)
+      const sinP = Ops.sin(aimPitch)
+      const fwdX = -sinY * cosP
+      const fwdY = sinP
+      const fwdZ = -cosY * cosP
+      const eyeY = attacker.y + (attacker.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT)
+
+      nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+        kind: "knifeSlash",
+        shotEventId: 0,
+        actorSlot: attacker.slotId,
+        targetSlot: null,
+        gunId: null,
+        x: attacker.x + fwdX * 0.72,
+        y: eyeY + fwdY * 0.5 - 0.12,
+        z: attacker.z + fwdZ * 0.72,
+        damage: 0
+      })
+
+      const curSolids = buildDynamicSolids(constructs, cableCar, map)
+
+      // 1. Closest opposing fighter inside forward melee cone (front 55 / backstab 110!)
+      let bestIdx = -1
+      let bestDist = KNIFE_RANGE
+      for (let ti = 0; ti < fighterEntries.length; ti++) {
+        const target = fighterEntries[ti]!.data
+        if (!target.alive || target.crew === attacker.crew) continue
+        const dx = target.x - attacker.x
+        const ty = target.y + (target.crouching && !target.isBoss ? 0.65 : 1.05)
+        const dy = ty - eyeY
+        const dz = target.z - attacker.z
+        const dist = Ops.hypot(Ops.hypot(dx, dz), dy)
+        const reach = KNIFE_RANGE + (target.isBoss ? 0.55 : 0)
+        if (dist > reach || dist > bestDist) continue
+        const dot = dist > 0.05 ? (dx * fwdX + dy * fwdY + dz * fwdZ) / dist : 1
+        if (dot < 0.45) continue
+        if (
+          dist > 0.75 &&
+          sweepSegmentVsWorld(attacker.x, eyeY, attacker.z, target.x, ty, target.z, 0, curSolids, map) !== null
+        ) {
+          continue
+        }
+        bestDist = dist
+        bestIdx = ti
+      }
+
+      if (bestIdx >= 0) {
+        const victim = fighterEntries[bestIdx]!.data
+        const atkHorizX = -sinY
+        const atkHorizZ = -cosY
+        const vicHorizX = -Ops.sin(victim.yaw)
+        const vicHorizZ = -Ops.cos(victim.yaw)
+        const facingSameWay = atkHorizX * vicHorizX + atkHorizZ * vicHorizZ
+        const isBackstab = facingSameWay > 0.35 && !victim.isBoss
+        const dmg = isBackstab ? KNIFE_DAMAGE_BACKSTAB : KNIFE_DAMAGE_FRONT
+        applyDamageToFighter(
+          bestIdx,
+          dmg,
+          attacker.slotId,
+          null,
+          0,
+          victim.x,
+          victim.y + 1.05,
+          victim.z,
+          "torso",
+          true
+        )
+      }
+
+      // 2. Also slice explosive barrels within knife reach!
+      for (let pi = 0; pi < props.length; pi++) {
+        const p = props[pi]!
+        if (p.exploded) continue
+        const dx = p.x - attacker.x
+        const dy = p.y + 0.55 - eyeY
+        const dz = p.z - attacker.z
+        const dist = Ops.hypot(Ops.hypot(dx, dz), dy)
+        if (dist > KNIFE_RANGE + 0.3) continue
+        const dot = dist > 0.05 ? (dx * fwdX + dy * fwdY + dz * fwdZ) / dist : 1
+        if (dot < 0.45) continue
+        const nextHp = p.hp - BARREL_MAX_HP
+        if (nextHp <= 0) {
+          props[pi] = { ...p, hp: 0, exploded: true, respawnTicksLeft: 900, vx: 0, vz: 0 }
+          detonateArea(
+            p.x,
+            p.y + 0.6,
+            p.z,
+            BARREL_BLAST_RADIUS,
+            BARREL_BLAST_DAMAGE,
+            attacker.slotId,
+            null,
+            0,
+            "barrelBlast",
+            p.id,
+            false
+          )
+        }
+      }
+
+      // 3. Also slash Elite Duel Foreman if in reach
+      if (foreman && foreman.state !== "defeated") {
+        const dx = foreman.x - attacker.x
+        const dz = foreman.z - attacker.z
+        const dist = Ops.hypot(dx, dz)
+        if (dist <= KNIFE_RANGE + 0.65) {
+          const dmg = foreman.state === "staggered" ? 95 : 55
+          const nextPosture = Math.max(0, foreman.posture - 28)
+          const nextHp = Math.max(0, foreman.hp - dmg)
+          let nextState: ForemanData["state"] = foreman.state
+          let nextStateTicks = foreman.stateTicksLeft
+          if (nextHp <= 0) {
+            nextState = "defeated"
+            nextStateTicks = 0
+          } else if (foreman.state !== "staggered" && nextPosture === 0) {
+            nextState = "staggered"
+            nextStateTicks = 150
+          }
+          foreman = {
+            ...foreman,
+            hp: nextHp,
+            posture: nextState === "staggered" ? foreman.maxPosture : nextPosture,
+            state: nextState,
+            stateTicksLeft: nextStateTicks
+          }
+          nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+            kind: "hit",
+            shotEventId: 0,
+            actorSlot: attacker.slotId,
+            targetSlot: -1,
+            gunId: null,
+            x: foreman.x,
+            y: foreman.y + 1.2,
+            z: foreman.z,
+            damage: dmg
+          })
+        }
+      }
+    }
 
     // 1. Process Sketch Placement & Erase actions in deterministic slot order (simultaneous conflict safe!)
     for (let idx = 0; idx < fighterEntries.length; idx++) {
@@ -1449,6 +1735,152 @@ export const StepCombatAndMatch = Game.System(
         entry.data = f
       }
 
+      // D2. Frag Grenade Throw [G] — 3D ballistic throw with bounce & radial blast!
+      if (
+        input.grenadeActionId &&
+        input.grenadeActionId > f.lastHandledGrenadeId &&
+        f.grenadeCooldownTicks === 0
+      ) {
+        const sinY = Ops.sin(input.yaw)
+        const cosY = Ops.cos(input.yaw)
+        const cosP = Ops.cos(input.pitch)
+        const sinP = Ops.sin(input.pitch)
+        const fwdX = -sinY * cosP
+        const fwdY = sinP
+        const fwdZ = -cosY * cosP
+        const eyeY = f.y + (f.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT)
+        const gx = f.x + fwdX * 0.5
+        const gy = Math.max(0.35, eyeY - 0.1 + fwdY * 0.35)
+        const gz = f.z + fwdZ * 0.5
+        const gId = nextGrenadeId++
+        grenades.push({
+          id: gId,
+          ownerSlot: f.slotId,
+          crew: f.crew,
+          x: gx,
+          y: gy,
+          z: gz,
+          vx: fwdX * GRENADE_THROW_SPEED + f.vx * 0.25,
+          vy: fwdY * GRENADE_THROW_SPEED + 2.6,
+          vz: fwdZ * GRENADE_THROW_SPEED + f.vz * 0.25,
+          fuseTicksLeft: GRENADE_FUSE_TICKS
+        })
+        f = {
+          ...f,
+          lastHandledGrenadeId: input.grenadeActionId,
+          grenadeCooldownTicks: GRENADE_COOLDOWN_TICKS
+        }
+        nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+          kind: "grenadeThrow",
+          shotEventId: 0,
+          actorSlot: f.slotId,
+          targetSlot: gId,
+          gunId: null,
+          x: gx,
+          y: gy,
+          z: gz,
+          damage: 0
+        })
+        entry.data = f
+      }
+
+      // D3. Remote C4 Ink Satchel [B] — 1st press plants sticky C4; 2nd press remote-detonates!
+      if (input.satchelActionId && input.satchelActionId > f.lastHandledSatchelId) {
+        f = { ...f, lastHandledSatchelId: input.satchelActionId }
+        const existingIdx = satchels.findIndex((s) => s.ownerSlot === f.slotId)
+        if (existingIdx >= 0) {
+          const s = satchels.splice(existingIdx, 1)[0]!
+          f = { ...f, satchelCooldownTicks: SATCHEL_COOLDOWN_TICKS }
+          entry.data = f
+          detonateArea(
+            s.x,
+            s.y,
+            s.z,
+            SATCHEL_BLAST_RADIUS,
+            SATCHEL_BLAST_DAMAGE,
+            f.slotId,
+            null,
+            0,
+            "satchelBlast",
+            s.id,
+            true
+          )
+          f = entry.data
+        } else if (f.satchelCooldownTicks === 0) {
+          const sinY = Ops.sin(input.yaw)
+          const cosY = Ops.cos(input.yaw)
+          const cosP = Ops.cos(input.pitch)
+          const sinP = Ops.sin(input.pitch)
+          const fwdX = -sinY * cosP
+          const fwdY = sinP
+          const fwdZ = -cosY * cosP
+          const eyeY = f.y + (f.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT)
+          const endX = f.x + fwdX * SATCHEL_PLANT_RANGE
+          const endY = eyeY + fwdY * SATCHEL_PLANT_RANGE
+          const endZ = f.z + fwdZ * SATCHEL_PLANT_RANGE
+          const dynNow = buildDynamicSolids(constructs, cableCar, map)
+          const wallHit = sweepSegmentVsWorld(f.x, eyeY, f.z, endX, endY, endZ, 0.08, dynNow, map)
+
+          let sx: number
+          let sy: number
+          let sz: number
+          let snx = 0
+          let sny = 1
+          let snz = 0
+          if (wallHit !== null) {
+            sx = f.x + (endX - f.x) * wallHit.t + wallHit.nx * 0.08
+            sy = Math.max(0.08, eyeY + (endY - eyeY) * wallHit.t + wallHit.ny * 0.08)
+            sz = f.z + (endZ - f.z) * wallHit.t + wallHit.nz * 0.08
+            snx = wallHit.nx
+            sny = wallHit.ny
+            snz = wallHit.nz
+          } else {
+            sx = clamp(f.x - sinY * 1.15, map.propBounds.minX, map.propBounds.maxX)
+            sy = f.y + 0.08
+            sz = clamp(f.z - cosY * 1.15, map.propBounds.minZ, map.propBounds.maxZ)
+          }
+          const sId = nextSatchelId++
+          satchels.push({
+            id: sId,
+            ownerSlot: f.slotId,
+            crew: f.crew,
+            x: sx,
+            y: sy,
+            z: sz,
+            nx: snx,
+            ny: sny,
+            nz: snz,
+            armedTicks: 0
+          })
+          nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+            kind: "satchelPlant",
+            shotEventId: 0,
+            actorSlot: f.slotId,
+            targetSlot: sId,
+            gunId: null,
+            x: sx,
+            y: sy,
+            z: sz,
+            damage: 0
+          })
+          entry.data = f
+        } else {
+          entry.data = f
+        }
+      }
+
+      // D4. Quick Commando Knife Jab [F] — close melee slash + unified Ink Parry window!
+      if (
+        input.meleeActionId &&
+        input.meleeActionId > f.lastHandledMeleeId &&
+        f.meleeCooldownTicks === 0
+      ) {
+        f = { ...f, lastHandledMeleeId: input.meleeActionId }
+        entry.data = f
+        performKnifeSlash(idx, input.yaw, input.pitch)
+        f = entry.data
+      }
+
       // E. Target-Sensitive Grapple (Marked Ledge -> pull self; Movable Barrel or Light Bot -> pull toward self!)
       if (input.grappleReleaseId && input.grappleReleaseId > f.lastHandledGrappleReleaseId) {
         f = { ...f, lastHandledGrappleReleaseId: input.grappleReleaseId, grapple: null }
@@ -1591,9 +2023,14 @@ export const StepCombatAndMatch = Game.System(
           vz: 0,
           yaw: bspawn.yaw,
           grounded: true,
+          ads: false,
+          recoil: NO_RECOIL,
+          bloom: NO_BLOOM,
+          flinchTicksLeft: 0,
           grapple: null,
           carryingScrap: 0,
-          cosmetics: { top: "workJacket", hat: "cap", swatch: "charcoal" }
+          cosmetics: { top: "workJacket", hat: "cap", swatch: "charcoal" },
+          brain: makeInitialBotBrain(bf.slotId, bspawn.x, bspawn.z)
         }
         bossSlot = bf.slotId
         nextEventSeq = pushEvent(feedItems, nextEventSeq, {
@@ -1655,6 +2092,7 @@ export const StepCombatAndMatch = Game.System(
             pitch: 0,
             grounded: true,
             crouching: false,
+            ads: false,
             alive: true,
             hp: PLAYER_MAX_HP,
             maxHp: PLAYER_MAX_HP,
@@ -1674,9 +2112,17 @@ export const StepCombatAndMatch = Game.System(
             fireCooldownTicks: 0,
             reloadTicksLeft: 0,
             wasFireHeld: false,
+            recoil: NO_RECOIL,
+            bloom: NO_BLOOM,
+            flinchTicksLeft: 0,
+            grenadeCooldownTicks: 0,
+            satchelCooldownTicks: 0,
+            meleeTicksLeft: 0,
+            meleeCooldownTicks: 0,
             grapple: null,
             carryingScrap: 0,
-            lastInputSeq: input.seq > 0 ? input.seq : f.lastInputSeq
+            lastInputSeq: input.seq > 0 ? input.seq : f.lastInputSeq,
+            brain: makeInitialBotBrain(f.slotId, spawn.x, spawn.z)
           }
           nextEventSeq = pushEvent(feedItems, nextEventSeq, {
             kind: "spawn",
@@ -1700,8 +2146,8 @@ export const StepCombatAndMatch = Game.System(
         continue
       }
 
-      // Weapon slot switch (1 = primary, 2 = sidearm)
-      let activeSlot = f.activeSlot
+      // Weapon slot switch (1 = primary, 2 = sidearm, 3 = commando knife)
+      let activeSlot: 1 | 2 | 3 = f.activeSlot
       let reloadTicksLeft = f.reloadTicksLeft
       let switchedWeapon = false
       if (input.switchSlot === 1 && activeSlot !== 1) {
@@ -1712,7 +2158,12 @@ export const StepCombatAndMatch = Game.System(
         activeSlot = 2
         reloadTicksLeft = 0
         switchedWeapon = true
+      } else if (input.switchSlot === 3 && activeSlot !== 3) {
+        activeSlot = 3
+        reloadTicksLeft = 0
+        switchedWeapon = true
       }
+      const ads = Boolean(input.ads) && activeSlot !== 3 && reloadTicksLeft === 0
 
       // Carry riders standing on the moving overhead Cable Car (preserving 360° aim/fire/jump-off!)
       let startX = f.x
@@ -1834,7 +2285,12 @@ export const StepCombatAndMatch = Game.System(
           }
         }
 
-        const speedMult = ARMORS[f.armorType].speedMultiplier
+        const adsMult = ads
+          ? activeSlot === 1 && GUNS[f.primaryGun].hasScope
+            ? SNIPER_ADS_SPEED_MULT
+            : ADS_SPEED_MULT
+          : 1.0
+        const speedMult = ARMORS[f.armorType].speedMultiplier * adsMult
         kin = stepPlayerMovement(
           {
             x: startX,
@@ -1860,116 +2316,150 @@ export const StepCombatAndMatch = Game.System(
 
       if (kin.crouching !== undefined) f = { ...f, crouching: kin.crouching }
 
-      const gunId: GunId = activeSlot === 1 ? f.primaryGun : "proofPistol"
-      const gun = GUNS[gunId]
       let primaryAmmo = f.primaryAmmo
       let sidearmAmmo = f.sidearmAmmo
       let fireCooldownTicks = switchedWeapon ? 0 : Math.max(0, f.fireCooldownTicks - 1)
+      let recoil = switchedWeapon ? NO_RECOIL : f.recoil
+      let bloom = switchedWeapon ? NO_BLOOM : f.bloom
 
-      if (reloadTicksLeft > 0) {
-        reloadTicksLeft -= 1
-        if (reloadTicksLeft === 0) {
-          if (activeSlot === 1) primaryAmmo = gun.magSize
-          else sidearmAmmo = gun.magSize
+      if (activeSlot === 3) {
+        recoil = NO_RECOIL
+        bloom = NO_BLOOM
+        // Equipped Commando Knife: LMB performs a crisp melee hack/jab + parry!
+        entry.data = { ...f, x: kin.x, y: kin.y, z: kin.z, activeSlot }
+        if (input.fire && !f.wasFireHeld && f.meleeCooldownTicks === 0) {
+          performKnifeSlash(idx, input.yaw, input.pitch)
+          f = entry.data
         }
-      }
+      } else {
+        const gunId: GunId = activeSlot === 1 ? f.primaryGun : "proofPistol"
+        const gun = GUNS[gunId]
+        recoil = recoilStep(recoil, gunId, nextTick)
+        bloom = bloomStep(bloom, gun, nextTick)
 
-      const curAmmo = activeSlot === 1 ? primaryAmmo : sidearmAmmo
-      const wantsReload =
-        (input.reload && curAmmo < gun.magSize) ||
-        (input.fire && curAmmo === 0 && fireCooldownTicks === 0)
-      if (wantsReload && reloadTicksLeft === 0) {
-        reloadTicksLeft = gun.reloadTicks
-        nextEventSeq = pushEvent(feedItems, nextEventSeq, {
-          kind: "reload",
-          shotEventId: 0,
-          actorSlot: f.slotId,
-          targetSlot: null,
-          gunId,
-          x: kin.x,
-          y: kin.y + (f.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT),
-          z: kin.z,
-          damage: 0
-        })
-      }
-
-      const canTrigger = gun.automatic ? input.fire : input.fire && !f.wasFireHeld
-      if (canTrigger && reloadTicksLeft === 0 && fireCooldownTicks === 0 && curAmmo > 0) {
-        if (activeSlot === 1) primaryAmmo -= 1
-        else sidearmAmmo -= 1
-        fireCooldownTicks = gun.fireCooldownTicks
-
-        const shotEventId =
-          !f.isBot && input.seq > 0
-            ? (f.slotId + 1) * 1_000_000 + (input.seq % 999_999)
-            : nextShotEventId++
-
-        const sinY = Ops.sin(input.yaw)
-        const cosY = Ops.cos(input.yaw)
-        const cosP = Ops.cos(input.pitch)
-        const sinP = Ops.sin(input.pitch)
-
-        const fwdX = -sinY * cosP
-        const fwdY = sinP
-        const fwdZ = -cosY * cosP
-        const rightX = cosY
-        const rightZ = -sinY
-
-        const muzzleX = kin.x + fwdX * 0.45 + rightX * 0.12
-        const muzzleY = kin.y + (f.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT) - 0.08 + fwdY * 0.45
-        const muzzleZ = kin.z + fwdZ * 0.45 + rightZ * 0.12
-
-        for (let p = 0; p < gun.pellets; p++) {
-          let spreadH: number
-          if (gun.pellets > 1) {
-            const norm = (p / (gun.pellets - 1)) * 2 - 1
-            spreadH = norm * gun.spreadRad + (random.next() - 0.5) * 0.014
-          } else {
-            spreadH = (random.next() - 0.5) * 2 * gun.spreadRad
+        if (reloadTicksLeft > 0) {
+          reloadTicksLeft -= 1
+          if (reloadTicksLeft === 0) {
+            if (activeSlot === 1) primaryAmmo = gun.magSize
+            else sidearmAmmo = gun.magSize
           }
-          const spreadV = (random.next() - 0.5) * 2 * gun.verticalSpreadRad
-
-          const pYaw = input.yaw + spreadH
-          const pPitch = clamp(input.pitch + spreadV, -MAX_PITCH, MAX_PITCH)
-          const pCosP = Ops.cos(pPitch)
-          const vx = -Ops.sin(pYaw) * pCosP * gun.projectileSpeed
-          const vy = Ops.sin(pPitch) * gun.projectileSpeed
-          const vz = -Ops.cos(pYaw) * pCosP * gun.projectileSpeed
-
-          commands.spawn(
-            Game.Command.spawn([
-              Projectile,
-              {
-                projectileId: nextProjectileId++,
-                shotEventId,
-                ownerSlot: f.slotId,
-                crew: f.crew,
-                gunId,
-                x: muzzleX,
-                y: muzzleY,
-                z: muzzleZ,
-                vx,
-                vy,
-                vz,
-                damage: gun.damage,
-                radius: gun.projectileRadius,
-                lifeTicksLeft: gun.projectileLifeTicks
-              }
-            ])
-          )
         }
 
-        nextEventSeq = pushEvent(feedItems, nextEventSeq, {
-          kind: "shot",
-          shotEventId,
-          actorSlot: f.slotId,
-          targetSlot: null,
-          gunId,
-          x: muzzleX,
-          y: muzzleY,
-          z: muzzleZ,
-          damage: 0
-        })
+        const curAmmo = activeSlot === 1 ? primaryAmmo : sidearmAmmo
+        const wantsReload =
+          (input.reload && curAmmo < gun.magSize) ||
+          (input.fire && curAmmo === 0 && fireCooldownTicks === 0)
+        if (wantsReload && reloadTicksLeft === 0) {
+          reloadTicksLeft = gun.reloadTicks
+          nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+            kind: "reload",
+            shotEventId: 0,
+            actorSlot: f.slotId,
+            targetSlot: null,
+            gunId,
+            x: kin.x,
+            y: kin.y + (f.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT),
+            z: kin.z,
+            damage: 0
+          })
+        }
+
+        const canTrigger = gun.automatic ? input.fire : input.fire && !f.wasFireHeld
+        if (canTrigger && reloadTicksLeft === 0 && fireCooldownTicks === 0 && curAmmo > 0) {
+          if (activeSlot === 1) primaryAmmo -= 1
+          else sidearmAmmo -= 1
+          fireCooldownTicks = gun.fireCooldownTicks
+
+          const shotEventId =
+            !f.isBot && input.seq > 0
+              ? (f.slotId + 1) * 1_000_000 + (input.seq % 999_999)
+              : nextShotEventId++
+
+          const baseYaw = input.yaw + recoil.yaw
+          const basePitch = clamp(input.pitch + recoil.pitch, -MAX_PITCH, MAX_PITCH)
+          const sinY = Ops.sin(baseYaw)
+          const cosY = Ops.cos(baseYaw)
+          const cosP = Ops.cos(basePitch)
+          const sinP = Ops.sin(basePitch)
+
+          const fwdX = -sinY * cosP
+          const fwdY = sinP
+          const fwdZ = -cosY * cosP
+          const rightX = cosY
+          const rightZ = -sinY
+
+          const muzzleX = kin.x + fwdX * 0.45 + rightX * 0.12
+          const muzzleY =
+            kin.y + (f.crouching ? PLAYER_CROUCH_EYE_HEIGHT : PLAYER_EYE_HEIGHT) - 0.08 + fwdY * 0.45
+          const muzzleZ = kin.z + fwdZ * 0.45 + rightZ * 0.12
+
+          const horizSpeed = Ops.hypot(kin.vx, kin.vz)
+          const effSpreadH = currentSpreadRad(
+            gun,
+            bloom,
+            horizSpeed,
+            !kin.grounded,
+            f.crouching,
+            ads
+          )
+          const spreadRatio = gun.spreadRad > 1e-5 ? effSpreadH / gun.spreadRad : 1
+          const effSpreadV = gun.verticalSpreadRad * spreadRatio
+
+          for (let p = 0; p < gun.pellets; p++) {
+            let spreadH: number
+            if (gun.pellets > 1) {
+              const norm = (p / (gun.pellets - 1)) * 2 - 1
+              spreadH = norm * effSpreadH + (random.next() - 0.5) * 0.014
+            } else {
+              spreadH = (random.next() - 0.5) * 2 * effSpreadH
+            }
+            const spreadV = (random.next() - 0.5) * 2 * effSpreadV
+
+            const pYaw = baseYaw + spreadH
+            const pPitch = clamp(basePitch + spreadV, -MAX_PITCH, MAX_PITCH)
+            const pCosP = Ops.cos(pPitch)
+            const vx = -Ops.sin(pYaw) * pCosP * gun.projectileSpeed
+            const vy = Ops.sin(pPitch) * gun.projectileSpeed
+            const vz = -Ops.cos(pYaw) * pCosP * gun.projectileSpeed
+
+            commands.spawn(
+              Game.Command.spawn([
+                Projectile,
+                {
+                  projectileId: nextProjectileId++,
+                  shotEventId,
+                  ownerSlot: f.slotId,
+                  crew: f.crew,
+                  gunId,
+                  x: muzzleX,
+                  y: muzzleY,
+                  z: muzzleZ,
+                  vx,
+                  vy,
+                  vz,
+                  damage: gun.damage,
+                  radius: gun.projectileRadius,
+                  lifeTicksLeft: gun.projectileLifeTicks
+                }
+              ])
+            )
+          }
+
+          recoil = recoilOnShot(recoil, gunId, nextTick, ads)
+          bloom = bloomOnShot(bloom, gun, nextTick)
+
+          nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+            kind: "shot",
+            shotEventId,
+            actorSlot: f.slotId,
+            targetSlot: null,
+            gunId,
+            x: muzzleX,
+            y: muzzleY,
+            z: muzzleZ,
+            damage: 0
+          })
+        }
       }
 
       entry.data = {
@@ -1983,123 +2473,104 @@ export const StepCombatAndMatch = Game.System(
         yaw: input.yaw,
         pitch: input.pitch,
         grounded: kin.grounded,
+        ads,
         activeSlot,
         primaryAmmo,
         sidearmAmmo,
         fireCooldownTicks,
         reloadTicksLeft,
         wasFireHeld: input.fire,
+        recoil,
+        bloom,
+        flinchTicksLeft: Math.max(0, f.flinchTicksLeft - 1),
         parryTicksLeft: Math.max(0, f.parryTicksLeft - 1),
         parryCooldownTicks: Math.max(0, f.parryCooldownTicks - 1),
         smokeCooldownTicks: Math.max(0, f.smokeCooldownTicks - 1),
+        grenadeCooldownTicks: Math.max(0, f.grenadeCooldownTicks - 1),
+        satchelCooldownTicks: Math.max(0, f.satchelCooldownTicks - 1),
+        meleeTicksLeft: Math.max(0, f.meleeTicksLeft - 1),
+        meleeCooldownTicks: Math.max(0, f.meleeCooldownTicks - 1),
         grappleCooldownTicks: Math.max(0, f.grappleCooldownTicks - 1),
         grapple,
         lastInputSeq: input.seq > 0 ? input.seq : f.lastInputSeq
       }
     }
 
-    // Helper for applying damage cleanly (used by projectiles, blasts & Foreman slam)
-    const applyDamageToFighter = (
-      targetIdx: number,
-      damage: number,
-      actorSlot: number,
-      gunId: GunId | null,
-      shotEventId: number,
-      hitX: number,
-      hitY: number,
-      hitZ: number,
-      zone: HitZone = "torso"
-    ) => {
-      const targetEntry = fighterEntries[targetIdx]!
-      const victim = targetEntry.data
-      if (!victim.alive) return
-      damage = Math.max(1, Math.round(damage * HIT_ZONE_MULT[zone]))
-      const eventZone = zone === "torso" ? undefined : zone
-      const prevArmor = zone === "head" && HEAD_BYPASSES_ARMOR ? 0 : victim.armor
-      const absorbed = Math.min(prevArmor, damage)
-      const nextArmor = victim.armor - absorbed
-      const overflow = damage - absorbed
-      const nextHp = Math.max(0, victim.hp - overflow)
-      const brokeArmor = prevArmor > 0 && nextArmor === 0
-
-      if (brokeArmor) {
-        nextEventSeq = pushEvent(feedItems, nextEventSeq, {
-          kind: "armorBreak",
-          shotEventId,
-          actorSlot,
-          targetSlot: victim.slotId,
-          gunId,
-          x: hitX,
-          y: hitY,
-          z: hitZ,
-          damage,
-          zone: eventZone
-        })
+    // 2b. Solid Fighter Body Collisions (firm enemy separation + gentle ally separation, wall-clamped)
+    const bodyColliders: Array<BodyCollider> = fighterEntries.map((e) => {
+      const f = e.data
+      const scale = f.isBoss ? BOSS_SCALE : 1
+      return {
+        slotId: f.slotId,
+        crew: f.crew,
+        alive: f.alive,
+        x: f.x,
+        y: f.y,
+        z: f.z,
+        height: (f.crouching && !f.isBoss ? PLAYER_CROUCH_HEIGHT : PLAYER_HEIGHT) * scale,
+        radius: PLAYER_RADIUS * scale
       }
-
-      if (nextHp <= 0) {
-        targetEntry.data = {
-          ...victim,
-          hp: 0,
-          armor: 0,
-          alive: false,
-          respawnTicksLeft: RESPAWN_TICKS,
-          deaths: victim.deaths + 1,
-          reloadTicksLeft: 0,
-          grapple: null,
-          carryingScrap: 0
-        }
-        const killerEntry = fighterEntries.find((e) => e.data.slotId === actorSlot)
-        if (killerEntry && killerEntry.data.slotId !== victim.slotId) {
-          killerEntry.data = { ...killerEntry.data, kills: killerEntry.data.kills + 1 }
-        }
-        nextEventSeq = pushEvent(feedItems, nextEventSeq, {
-          kind: "elim",
-          shotEventId,
-          actorSlot,
-          targetSlot: victim.slotId,
-          gunId,
-          x: hitX,
-          y: hitY,
-          z: hitZ,
-          damage,
-          zone: eventZone
-        })
-        if (victim.isBoss) {
-          bossDefeated = true
-          const killerCrew = killerEntry && killerEntry.data.slotId !== victim.slotId ? killerEntry.data.crew : null
-          bossDownCrew = killerCrew
-          nextEventSeq = pushEvent(feedItems, nextEventSeq, {
-            kind: "bossDown",
-            shotEventId,
-            actorSlot,
-            targetSlot: victim.slotId,
-            gunId,
-            x: hitX,
-            y: hitY,
-            z: hitZ,
-            damage: BOSS_KILL_SCORE
-          })
-        }
-      } else {
-        targetEntry.data = { ...victim, hp: nextHp, armor: nextArmor }
-        nextEventSeq = pushEvent(feedItems, nextEventSeq, {
-          kind: "hit",
-          shotEventId,
-          actorSlot,
-          targetSlot: victim.slotId,
-          gunId,
-          x: hitX,
-          y: hitY,
-          z: hitZ,
-          damage,
-          zone: eventZone
-        })
+    })
+    resolveFighterBodyCollisions(bodyColliders, dynamicSolids, map)
+    for (let i = 0; i < fighterEntries.length; i++) {
+      const b = bodyColliders[i]!
+      const f = fighterEntries[i]!.data
+      if (f.alive && (b.x !== f.x || b.z !== f.z)) {
+        fighterEntries[i]!.data = { ...f, x: b.x, z: b.z }
       }
     }
 
+    // 2c. Step Live Frag Grenades (ballistic arc, wall/floor bounce, fuse blast) & C4 Satchels
+    const nextGrenades: Array<GrenadeData> = []
+    for (const g of grenades) {
+      const { next, bounced } = stepGrenadeMotion(g, DT, dynamicSolids, map)
+      if (bounced) {
+        nextEventSeq = pushEvent(feedItems, nextEventSeq, {
+          kind: "grenadeBounce",
+          shotEventId: 0,
+          actorSlot: g.ownerSlot,
+          targetSlot: g.id,
+          gunId: null,
+          x: next.x,
+          y: next.y,
+          z: next.z,
+          damage: 0
+        })
+      }
+      const nextFuse = g.fuseTicksLeft - 1
+      if (nextFuse <= 0) {
+        detonateArea(
+          next.x,
+          next.y + 0.15,
+          next.z,
+          GRENADE_BLAST_RADIUS,
+          GRENADE_BLAST_DAMAGE,
+          g.ownerSlot,
+          null,
+          0,
+          "grenadeBlast",
+          g.id,
+          true
+        )
+      } else {
+        nextGrenades.push({
+          ...g,
+          x: next.x,
+          y: next.y,
+          z: next.z,
+          vx: next.vx,
+          vy: next.vy,
+          vz: next.vz,
+          fuseTicksLeft: nextFuse
+        })
+      }
+    }
+    const nextSatchels: Array<SatchelData> = satchels.map((s) => ({
+      ...s,
+      armedTicks: s.armedTicks + 1
+    }))
+
     // 3. Step projectiles with swept collision against world, constructs, smoke, barrels, Foreman & avatars
-    let foreman = matchPrev.foreman
     for (const pEntity of queries.projectiles.each()) {
       const proj = queries.projectiles.data.projectile.get(pEntity)
       const nx = proj.x + proj.vx * DT
@@ -2242,50 +2713,60 @@ export const StepCombatAndMatch = Game.System(
             damage: 0
           })
         } else {
+          const pGun = GUNS[proj.gunId]
+          const distTraveled = Math.max(
+            0,
+            (pGun.projectileLifeTicks - proj.lifeTicksLeft) * DT * pGun.projectileSpeed
+          )
+          const hitDmg = resolveWeaponHitDamage(pGun, zone, distTraveled)
           applyDamageToFighter(
             hitIdx,
-            proj.damage,
+            hitDmg,
             proj.ownerSlot,
             proj.gunId,
             proj.shotEventId,
             hitX,
             hitY,
             hitZ,
-            zone
+            zone,
+            true
           )
           commands.despawn(pEntity)
         }
       } else if (hitKind === "prop" && hitIdx >= 0) {
+        const hitX = proj.x + (nx - proj.x) * bestT
+        const hitY = proj.y + (ny - proj.y) * bestT
+        const hitZ = proj.z + (nz - proj.z) * bestT
         const p = props[hitIdx]!
         const nextHp = p.hp - proj.damage
         if (nextHp <= 0) {
           props[hitIdx] = { ...p, hp: 0, exploded: true, respawnTicksLeft: 900, vx: 0, vz: 0 }
-          // Blast clears Ink Smoke in a 3D sphere + deals splash damage!
-          clearSmokeInSphere(smokeClouds, p.x, p.y + 0.6, p.z, BARREL_BLAST_RADIUS)
+          detonateArea(
+            p.x,
+            p.y + 0.6,
+            p.z,
+            BARREL_BLAST_RADIUS,
+            BARREL_BLAST_DAMAGE,
+            proj.ownerSlot,
+            proj.gunId,
+            proj.shotEventId,
+            "barrelBlast",
+            p.id,
+            false
+          )
+        } else {
+          props[hitIdx] = { ...p, hp: nextHp }
           nextEventSeq = pushEvent(feedItems, nextEventSeq, {
-            kind: "barrelBlast",
+            kind: "barrelHit",
             shotEventId: proj.shotEventId,
             actorSlot: proj.ownerSlot,
             targetSlot: p.id,
             gunId: proj.gunId,
-            x: p.x,
-            y: p.y + 0.6,
-            z: p.z,
-            damage: BARREL_BLAST_DAMAGE
+            x: hitX,
+            y: hitY,
+            z: hitZ,
+            damage: proj.damage
           })
-          for (let fi = 0; fi < fighterEntries.length; fi++) {
-            const ft = fighterEntries[fi]!.data
-            if (!ft.alive) continue
-            const dist = Ops.hypot(Ops.hypot(ft.x - p.x, ft.z - p.z), ft.y - p.y)
-            if (dist <= BARREL_BLAST_RADIUS) {
-              const splash = Math.round(BARREL_BLAST_DAMAGE * (1 - dist / (BARREL_BLAST_RADIUS + 0.5)))
-              if (splash > 0) {
-                applyDamageToFighter(fi, splash, proj.ownerSlot, proj.gunId, proj.shotEventId, ft.x, ft.y + 1, ft.z)
-              }
-            }
-          }
-        } else {
-          props[hitIdx] = { ...p, hp: nextHp }
         }
         commands.despawn(pEntity)
       } else if (hitKind === "foreman" && foreman) {
@@ -2759,8 +3240,12 @@ export const StepCombatAndMatch = Game.System(
       nextEventSeq,
       nextConstructId,
       nextSmokeId,
+      nextGrenadeId,
+      nextSatchelId,
       constructs,
       smokeClouds,
+      grenades: nextGrenades,
+      satchels: nextSatchels,
       props,
       cableCar,
       foreman,

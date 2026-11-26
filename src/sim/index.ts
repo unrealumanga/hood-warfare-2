@@ -80,6 +80,8 @@ export function readSnapshot(runtime: MatchRuntime): MatchSnapshot {
 }
 
 export * from "./data.ts"
+export * from "./botAi.ts"
+export * from "./gunplay.ts"
 export * from "./map.ts"
 export * from "./physics.ts"
 export * from "./schema.ts"

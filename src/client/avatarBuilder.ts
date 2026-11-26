@@ -16,9 +16,14 @@ import {
   addSilhouetteShell,
   createInkMaterial
 } from "./inkShader.ts"
+import { createCommandoKnifeMesh, createSniperMesh } from "./combatFx.ts"
 
-/** Builds one of the 4 unmistakable Inkline weapon 3D models pointing along -Z */
-export function createGunMesh(gunId: GunId): THREE.Group {
+export type HeldWeaponId = GunId | "commandoKnife"
+
+/** Builds one of the Inkline weapon 3D models pointing along -Z */
+export function createGunMesh(gunId: HeldWeaponId): THREE.Group {
+  if (gunId === "pressSniper") return createSniperMesh()
+  if (gunId === "commandoKnife") return createCommandoKnifeMesh()
   const g = new THREE.Group()
   const metal = createInkMaterial(0x4b5650, { hatchStrength: 0.3 })
   const darkMetal = createInkMaterial(0x2d3631, { hatchStrength: 0.2 })
@@ -136,7 +141,7 @@ export function createAvatarRig(
   crew: CrewId,
   cosmetics: CosmeticLoadout,
   armor: ArmorId,
-  gunId: GunId
+  gunId: HeldWeaponId
 ): AvatarRig {
   const root = new THREE.Group()
   const crewDef = CREWS[crew]
@@ -411,7 +416,7 @@ export interface ViewmodelRig {
 export function createViewmodelRig(
   crew: CrewId,
   cosmetics: CosmeticLoadout,
-  gunId: GunId
+  gunId: HeldWeaponId
 ): ViewmodelRig {
   const root = new THREE.Group()
   const gunPivot = new THREE.Group()
@@ -456,7 +461,7 @@ export function createViewmodelRig(
   gunPivot.add(rGlove)
 
   // Left support hand & sleeve for 2-handed primaries
-  if (gunId !== "proofPistol") {
+  if (gunId !== "proofPistol" && gunId !== "commandoKnife") {
     const lSleeve = new THREE.Mesh(new THREE.BoxGeometry(0.105, 0.105, 0.44), sleeveMat)
     lSleeve.position.set(-0.24, -0.14, 0.08)
     lSleeve.rotation.set(0.2, 0.56, 0)
@@ -495,7 +500,16 @@ export function createViewmodelRig(
     depthTest: false
   })
   const muzzleLight = new THREE.Mesh(new THREE.OctahedronGeometry(0.09, 0), muzzleMat)
-  const muzzleZ = gunId === "linecaster" ? -0.78 : gunId === "broadside" ? -0.62 : gunId === "rollerSmg" ? -0.56 : -0.26
+  const muzzleZ =
+    gunId === "pressSniper"
+      ? -0.88
+      : gunId === "linecaster"
+        ? -0.78
+        : gunId === "broadside"
+          ? -0.62
+          : gunId === "rollerSmg"
+            ? -0.56
+            : -0.26
   muzzleLight.position.set(0, 0.05, muzzleZ)
   muzzleLight.visible = false
   gunPivot.add(muzzleLight)

@@ -12,11 +12,13 @@ import {
   type FighterData,
   type ForemanData,
   type FoundryData,
+  type GrenadeData,
   type HealthPickupData,
   type MatchEventItem,
   type MatchWinner,
   type MovablePropData,
   type ProjectileData,
+  type SatchelData,
   type SmokeCloudData
 } from "./schema.ts"
 import type { GameModeId } from "./data.ts"
@@ -40,6 +42,8 @@ export interface MatchSnapshot {
   readonly projectiles: ReadonlyArray<ProjectileData>
   readonly constructs: ReadonlyArray<ConstructData>
   readonly smokeClouds: ReadonlyArray<SmokeCloudData>
+  readonly grenades: ReadonlyArray<GrenadeData>
+  readonly satchels: ReadonlyArray<SatchelData>
   readonly props: ReadonlyArray<MovablePropData>
   readonly cableCar: CableCarData
   readonly foreman: ForemanData | null
@@ -100,6 +104,8 @@ export const ReadMatchSnapshot = Game.Inspector(
       projectiles,
       constructs: match.constructs,
       smokeClouds: match.smokeClouds,
+      grenades: match.grenades,
+      satchels: match.satchels,
       props: match.props,
       cableCar: match.cableCar,
       foreman: match.foreman,

@@ -48,8 +48,30 @@ export const GRAPPLE_RANGE = 22
 export const GRAPPLE_MAX_TICKS = 48
 export const GRAPPLE_COOLDOWN_TICKS = 120
 export const GRAPPLE_PULL_SPEED = 18.0
-export const BARREL_BLAST_RADIUS = 4.6
-export const BARREL_BLAST_DAMAGE = 55
+export const BARREL_MAX_HP = 25
+export const BARREL_BLAST_RADIUS = 5.0
+export const BARREL_BLAST_DAMAGE = 75
+
+// ── Grenade, Remote C4 Satchel & Commando Knife Constants ────────────────
+export const GRENADE_FUSE_TICKS = 90 // 1.5s fuse
+export const GRENADE_THROW_SPEED = 15.5
+export const GRENADE_BLAST_RADIUS = 5.4
+export const GRENADE_BLAST_DAMAGE = 115
+export const GRENADE_COOLDOWN_TICKS = 8 * TICK_HZ // 8s recharge
+
+export const SATCHEL_PLANT_RANGE = 4.8
+export const SATCHEL_BLAST_RADIUS = 5.8
+export const SATCHEL_BLAST_DAMAGE = 140
+export const SATCHEL_COOLDOWN_TICKS = 10 * TICK_HZ // 10s recharge after detonate
+
+export const KNIFE_RANGE = 2.65
+export const KNIFE_DAMAGE_FRONT = 55
+export const KNIFE_DAMAGE_BACKSTAB = 110
+export const KNIFE_SWING_TICKS = 18 // 0.30s swing & active parry window
+export const KNIFE_COOLDOWN_TICKS = 34 // crisp 0.56s cadence
+
+export const ADS_SPEED_MULT = 0.65
+export const SNIPER_ADS_SPEED_MULT = 0.52
 
 export const ANOMALY_CYCLE_TICKS = 24 * TICK_HZ
 export const ANOMALY_DURATION_TICKS = 14 * TICK_HZ
@@ -98,11 +120,18 @@ export const GUN_IDS = [
   "rollerSmg",
   "broadside",
   "linecaster",
+  "pressSniper",
   "cursedBlock"
 ] as const
 export type GunId = (typeof GUN_IDS)[number]
 
-export const PRIMARY_GUN_IDS = ["rollerSmg", "broadside", "linecaster", "cursedBlock"] as const
+export const PRIMARY_GUN_IDS = [
+  "rollerSmg",
+  "broadside",
+  "linecaster",
+  "pressSniper",
+  "cursedBlock"
+] as const
 export type PrimaryGunId = (typeof PRIMARY_GUN_IDS)[number]
 
 export interface GunDef {
@@ -121,6 +150,16 @@ export interface GunDef {
   readonly projectileLifeTicks: number
   readonly projectileRadius: number
   readonly scoreMultiplier: number
+  readonly bloomPerShot: number
+  readonly bloomSpreadMult: number
+  readonly bloomHoldTicks: number
+  readonly bloomDecayPerTick: number
+  readonly adsSpreadMult: number
+  readonly headMult: number
+  readonly falloffStart: number
+  readonly falloffEnd: number
+  readonly falloffMin: number
+  readonly hasScope?: boolean
   readonly isCursed?: boolean
   readonly description: string
 }
@@ -134,14 +173,23 @@ export const GUNS: Record<GunId, GunDef> = {
     damage: 20,
     pellets: 1,
     magSize: 12,
-    fireCooldownTicks: 13, // crisp semi-auto ~4.6/sec
-    reloadTicks: 66, // 1.1s
+    fireCooldownTicks: 13,
+    reloadTicks: 66,
     spreadRad: 0.01,
     verticalSpreadRad: 0.008,
     projectileSpeed: 54,
-    projectileLifeTicks: 84, // 1.4s
+    projectileLifeTicks: 84,
     projectileRadius: 0.08,
     scoreMultiplier: 1,
+    bloomPerShot: 0.16,
+    bloomSpreadMult: 1.1,
+    bloomHoldTicks: 6,
+    bloomDecayPerTick: 0.03,
+    adsSpreadMult: 0.45,
+    headMult: 2.5,
+    falloffStart: 18,
+    falloffEnd: 42,
+    falloffMin: 0.65,
     description: "Crisp single ink bolt per click · 20 dmg · 12 mag"
   },
   rollerSmg: {
@@ -149,36 +197,54 @@ export const GUNS: Record<GunId, GunDef> = {
     name: "Roller SMG",
     slot: "primary",
     automatic: true,
-    damage: 10,
+    damage: 14,
     pellets: 1,
     magSize: 30,
-    fireCooldownTicks: 7, // ~8.6-9 shots/sec
-    reloadTicks: 87, // 1.45s
-    spreadRad: 0.032,
-    verticalSpreadRad: 0.024,
-    projectileSpeed: 48,
-    projectileLifeTicks: 66, // 1.1s
+    fireCooldownTicks: 7,
+    reloadTicks: 87,
+    spreadRad: 0.024,
+    verticalSpreadRad: 0.018,
+    projectileSpeed: 50,
+    projectileLifeTicks: 66,
     projectileRadius: 0.07,
     scoreMultiplier: 1,
-    description: "Continuous ink stream · 10 dmg · 9/s · 30 mag"
+    bloomPerShot: 0.085,
+    bloomSpreadMult: 2.1,
+    bloomHoldTicks: 4,
+    bloomDecayPerTick: 0.025,
+    adsSpreadMult: 0.48,
+    headMult: 2.0,
+    falloffStart: 14,
+    falloffEnd: 34,
+    falloffMin: 0.55,
+    description: "Learnable ink burst stream · 14 dmg · 9/s · 30 mag"
   },
   broadside: {
     id: "broadside",
     name: "Broadside",
     slot: "primary",
     automatic: false,
-    damage: 8,
+    damage: 12,
     pellets: 5,
     magSize: 5,
-    fireCooldownTicks: 60, // 1 shot/sec
-    reloadTicks: 111, // 1.85s
-    spreadRad: 0.11,
-    verticalSpreadRad: 0.032,
-    projectileSpeed: 38,
-    projectileLifeTicks: 22, // short-lived ~14m reach
+    fireCooldownTicks: 60,
+    reloadTicks: 111,
+    spreadRad: 0.10,
+    verticalSpreadRad: 0.03,
+    projectileSpeed: 40,
+    projectileLifeTicks: 24,
     projectileRadius: 0.085,
     scoreMultiplier: 1,
-    description: "Wide 5-pellet ink fan · 8×5 dmg · 1/s · 5 volleys"
+    bloomPerShot: 0.45,
+    bloomSpreadMult: 0.4,
+    bloomHoldTicks: 10,
+    bloomDecayPerTick: 0.05,
+    adsSpreadMult: 0.72,
+    headMult: 1.75,
+    falloffStart: 8,
+    falloffEnd: 16,
+    falloffMin: 0.25,
+    description: "Wide 5-pellet ink fan · 12×5 dmg · 1/s · 5 volleys"
   },
   linecaster: {
     id: "linecaster",
@@ -188,15 +254,52 @@ export const GUNS: Record<GunId, GunDef> = {
     damage: 48,
     pellets: 1,
     magSize: 6,
-    fireCooldownTicks: 50, // 1.2 shots/sec
-    reloadTicks: 120, // 2.0s
+    fireCooldownTicks: 42,
+    reloadTicks: 110,
     spreadRad: 0.002,
     verticalSpreadRad: 0.002,
-    projectileSpeed: 30, // slow, bright, straight bolt
-    projectileLifeTicks: 132, // 2.2s
+    projectileSpeed: 36,
+    projectileLifeTicks: 132,
     projectileRadius: 0.13,
     scoreMultiplier: 1,
-    description: "Slow bright precision bolt · 48 dmg · 1.2/s · 6 mag"
+    bloomPerShot: 0.3,
+    bloomSpreadMult: 0.9,
+    bloomHoldTicks: 10,
+    bloomDecayPerTick: 0.035,
+    adsSpreadMult: 0.35,
+    headMult: 2.5,
+    falloffStart: 30,
+    falloffEnd: 60,
+    falloffMin: 0.75,
+    description: "Bright precision marksman bolt · 48 dmg · 6 mag"
+  },
+  pressSniper: {
+    id: "pressSniper",
+    name: "Press Sniper",
+    slot: "primary",
+    automatic: false,
+    damage: 95,
+    pellets: 1,
+    magSize: 5,
+    fireCooldownTicks: 70, // crisp 1.17s bolt cycle
+    reloadTicks: 130,
+    spreadRad: 0.048, // hipfire penalty; razor-tight when scoped (RMB)!
+    verticalSpreadRad: 0.038,
+    projectileSpeed: 105,
+    projectileLifeTicks: 90,
+    projectileRadius: 0.11,
+    scoreMultiplier: 1,
+    bloomPerShot: 0.55,
+    bloomSpreadMult: 0.8,
+    bloomHoldTicks: 16,
+    bloomDecayPerTick: 0.04,
+    adsSpreadMult: 0.015, // razor pinpoint inside Scope!
+    headMult: 2.5,
+    falloffStart: 50,
+    falloffEnd: 90,
+    falloffMin: 0.9,
+    hasScope: true,
+    description: "Scoped bolt-action sniper · RMB 24° optic · 95 body / 1-shot head · 5 mag"
   },
   cursedBlock: {
     id: "cursedBlock",
@@ -205,15 +308,24 @@ export const GUNS: Record<GunId, GunDef> = {
     automatic: false,
     damage: 88,
     pellets: 1,
-    magSize: 1, // Voluntary single-shot cursed primary!
+    magSize: 1,
     fireCooldownTicks: 30,
-    reloadTicks: 110, // 1.83s chamber reload
+    reloadTicks: 110,
     spreadRad: 0.001,
     verticalSpreadRad: 0.001,
     projectileSpeed: 42,
     projectileLifeTicks: 120,
     projectileRadius: 0.14,
     scoreMultiplier: 1.5,
+    bloomPerShot: 0.5,
+    bloomSpreadMult: 0.5,
+    bloomHoldTicks: 14,
+    bloomDecayPerTick: 0.04,
+    adsSpreadMult: 0.35,
+    headMult: 2.5,
+    falloffStart: 25,
+    falloffEnd: 55,
+    falloffMin: 0.65,
     isCursed: true,
     description: "CURSED · Single-shot breech · 88 dmg · 1.5× match score · unlocks Gilded swatch"
   }

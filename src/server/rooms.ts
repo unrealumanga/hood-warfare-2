@@ -66,7 +66,7 @@ export function sanitizeInput(raw: unknown): PlayerInput | null {
     return typeof v === "number" && Number.isFinite(v) ? v : fallback
   }
   const sw = r["switchSlot"]
-  const switchSlot: 0 | 1 | 2 = sw === 1 || sw === 2 ? sw : 0
+  const switchSlot: 0 | 1 | 2 | 3 = sw === 1 || sw === 2 || sw === 3 ? sw : 0
 
   let sketchAction: PlayerInput["sketchAction"] = null
   const rawSketch = r["sketchAction"]
@@ -93,6 +93,7 @@ export function sanitizeInput(raw: unknown): PlayerInput | null {
     yaw: num("yaw", 0),
     pitch: Math.max(-1.45, Math.min(1.45, num("pitch", 0))),
     crouch: Boolean(r["crouch"]),
+    ads: Boolean(r["ads"]),
     jump: Boolean(r["jump"]),
     fire: Boolean(r["fire"]),
     reload: Boolean(r["reload"]),
@@ -101,6 +102,9 @@ export function sanitizeInput(raw: unknown): PlayerInput | null {
     eraseActionId: Math.max(0, Math.floor(num("eraseActionId", 0))),
     parryActionId: Math.max(0, Math.floor(num("parryActionId", 0))),
     smokeActionId: Math.max(0, Math.floor(num("smokeActionId", 0))),
+    grenadeActionId: Math.max(0, Math.floor(num("grenadeActionId", 0))),
+    satchelActionId: Math.max(0, Math.floor(num("satchelActionId", 0))),
+    meleeActionId: Math.max(0, Math.floor(num("meleeActionId", 0))),
     grappleActionId: Math.max(0, Math.floor(num("grappleActionId", 0))),
     grappleReleaseId: Math.max(0, Math.floor(num("grappleReleaseId", 0)))
   }

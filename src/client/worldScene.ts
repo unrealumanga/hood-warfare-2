@@ -3,11 +3,17 @@ import { addOverprintDetails } from "./overprintDetails.ts"
 import { addYardDetails } from "./yardDetails.ts"
 import * as THREE from "three"
 import {
+  ADS_SPEED_MULT,
   ARMORS,
+  BARREL_BLAST_RADIUS,
   CREWS,
+  GRENADE_BLAST_RADIUS,
   GUNS,
+  KNIFE_SWING_TICKS,
   PLAYER_CROUCH_EYE_HEIGHT,
   PLAYER_EYE_HEIGHT,
+  SATCHEL_BLAST_RADIUS,
+  SNIPER_ADS_SPEED_MULT,
   TICK_HZ,
   buildDynamicSolids,
   stepPlayerMovement,
@@ -23,8 +29,14 @@ import {
   createAvatarRig,
   createViewmodelRig,
   type AvatarRig,
+  type HeldWeaponId,
   type ViewmodelRig
 } from "./avatarBuilder.ts"
+import {
+  CombatFxManager,
+  createGrenadeMesh,
+  createSatchelMesh
+} from "./combatFx.ts"
 import {
   INKLINE_PALETTE,
   addInkEdges,
@@ -81,8 +93,11 @@ export class BellYardScene {
   private readonly projectileMeshes = new Map<number, THREE.Mesh>()
   private readonly constructMeshes = new Map<number, THREE.Group>()
   private readonly propMeshes = new Map<number, THREE.Group>()
+  private readonly grenadeMeshes = new Map<number, THREE.Group>()
+  private readonly satchelMeshes = new Map<number, { group: THREE.Group; led: THREE.Mesh }>()
   private readonly scrapMeshes = new Map<number, THREE.Mesh>()
   private readonly burstFx: Array<BurstFx> = []
+  private readonly combatFx = new CombatFxManager(this.worldScene)
   private readonly muralMeshes: Array<{
     readonly mesh: THREE.Mesh
     owner: "neutral" | 0 | 1
@@ -112,6 +127,10 @@ export class BellYardScene {
   private vmMuzzleTimer = 0
   private vmWalkPhase = 0
   private vmReloadProgress = 0
+  private vmAdsBlend = 0
+  private vmKnifeSlashTimer = 0
+  private hurtFlinchTimer = 0
+  private currentFov = 78
 
   // Local client prediction & server reconciliation state
   private predictedKin: KinematicState | null = null
@@ -708,6 +727,25 @@ export class BellYardScene {
     }
     this.projectileMeshes.clear()
 
+    for (const g of this.grenadeMeshes.values()) {
+      this.worldScene.remove(g)
+      disposeObject3D(g)
+    }
+    this.grenadeMeshes.clear()
+
+    for (const s of this.satchelMeshes.values()) {
+      this.worldScene.remove(s.group)
+      disposeObject3D(s.group)
+    }
+    this.satchelMeshes.clear()
+
+    this.currentFov = 78
+    this.camera.fov = 78
+    this.camera.updateProjectionMatrix()
+    this.vmAdsBlend = 0
+    this.vmKnifeSlashTimer = 0
+    this.hurtFlinchTimer = 0
+
     if (this.healthPickupGroup) {
       this.worldScene.remove(this.healthPickupGroup)
       disposeObject3D(this.healthPickupGroup)
@@ -809,7 +847,13 @@ export class BellYardScene {
       }
     }
 
-    const speedMult = ARMORS[localFighter.armorType].speedMultiplier
+    const isAds = Boolean(input.ads) && localFighter.activeSlot !== 3 && localFighter.reloadTicksLeft === 0
+    const adsMult = isAds
+      ? localFighter.activeSlot === 1 && GUNS[localFighter.primaryGun].hasScope
+        ? SNIPER_ADS_SPEED_MULT
+        : ADS_SPEED_MULT
+      : 1.0
+    const speedMult = ARMORS[localFighter.armorType].speedMultiplier * adsMult
     const extraSolids = snapshot ? buildDynamicSolids(snapshot.constructs, snapshot.cableCar, mapForId(snapshot.mapId)) : []
     this.predictedKin = stepPlayerMovement(
       this.predictedKin,
@@ -900,8 +944,17 @@ export class BellYardScene {
       const first = this.playedShotEventIds.values().next().value
       if (first !== undefined) this.playedShotEventIds.delete(first)
     }
-    this.vmRecoil = gunId === "broadside" ? 1.0 : gunId === "linecaster" ? 0.9 : gunId === "proofPistol" ? 0.58 : 0.36
-    this.vmMuzzleTimer = gunId === "linecaster" ? 0.09 : 0.055
+    this.vmRecoil =
+      gunId === "pressSniper"
+        ? 1.15
+        : gunId === "broadside"
+          ? 1.0
+          : gunId === "linecaster"
+            ? 0.9
+            : gunId === "proofPistol"
+              ? 0.58
+              : 0.36
+    this.vmMuzzleTimer = gunId === "linecaster" || gunId === "pressSniper" ? 0.09 : 0.055
   }
 
   /** Update & render Bell Yard 3D FPS frame */
@@ -939,6 +992,7 @@ export class BellYardScene {
     }
 
     this.stepBurstFx(dt)
+    this.combatFx.step(dt)
 
     this.renderer.clear()
     this.renderer.render(this.worldScene, this.camera)
@@ -964,17 +1018,44 @@ export class BellYardScene {
         if (ev.shotEventId > 0) this.playedShotEventIds.add(ev.shotEventId)
         if (isLocalActor && ev.gunId) {
           this.vmRecoil =
-            ev.gunId === "broadside" ? 1.0 : ev.gunId === "linecaster" ? 0.9 : ev.gunId === "proofPistol" ? 0.55 : 0.34
-          this.vmMuzzleTimer = 0.06
+            ev.gunId === "pressSniper"
+              ? 1.15
+              : ev.gunId === "broadside"
+                ? 1.0
+                : ev.gunId === "linecaster"
+                  ? 0.9
+                  : ev.gunId === "proofPistol"
+                    ? 0.55
+                    : 0.34
+          this.vmMuzzleTimer = ev.gunId === "pressSniper" ? 0.085 : 0.06
         }
       } else if (ev.kind === "hit") {
         this.spawnBurst(ev.x, ev.y, ev.z, INKLINE_PALETTE.inkDark, 0.24, 0.22)
+        this.combatFx.spawnImpact(ev.x, ev.y, ev.z, "flesh", ev.zone === "head")
+        if (isLocalTarget) this.hurtFlinchTimer = 0.16
       } else if (ev.kind === "armorBreak") {
         this.spawnBurst(ev.x, ev.y, ev.z, 0x3b72c4, 0.55, 0.36)
+        this.combatFx.spawnImpact(ev.x, ev.y, ev.z, "armor", ev.zone === "head")
+        if (isLocalTarget) this.hurtFlinchTimer = 0.2
       } else if (ev.kind === "elim") {
         this.spawnBurst(ev.x, ev.y, ev.z, INKLINE_PALETTE.vermilion, 0.72, 0.48)
       } else if (ev.kind === "pickup") {
         this.spawnBurst(ev.x, ev.y, ev.z, 0x22c55e, 0.72, 0.45)
+      } else if (ev.kind === "barrelHit") {
+        this.combatFx.spawnBarrelSpark(ev.x, ev.y, ev.z)
+      } else if (ev.kind === "barrelBlast") {
+        this.combatFx.spawnExplosion(ev.x, ev.y, ev.z, BARREL_BLAST_RADIUS, INKLINE_PALETTE.vermilion)
+      } else if (ev.kind === "grenadeBlast") {
+        this.combatFx.spawnExplosion(ev.x, ev.y, ev.z, GRENADE_BLAST_RADIUS, INKLINE_PALETTE.ochre)
+      } else if (ev.kind === "satchelBlast") {
+        this.combatFx.spawnExplosion(ev.x, ev.y, ev.z, SATCHEL_BLAST_RADIUS, INKLINE_PALETTE.vermilion)
+      } else if (ev.kind === "knifeSlash") {
+        const actor = snapshot.fighters.find((f) => f.slotId === ev.actorSlot)
+        const yaw = actor?.yaw ?? 0
+        const pitch = actor?.pitch ?? 0
+        const col = actor?.crew === 0 ? INKLINE_PALETTE.cobalt : INKLINE_PALETTE.vermilion
+        this.combatFx.spawnKnifeSlash(ev.x, ev.y, ev.z, yaw, pitch, col)
+        if (isLocalActor) this.vmKnifeSlashTimer = 0.28
       }
 
       this.callbacks.onEvent?.(ev, isLocalActor, isLocalTarget)
@@ -1198,6 +1279,58 @@ export class BellYardScene {
         }
       }
     }
+
+    // 9. Live Frag Grenades [G]
+    const liveGrenadeIds = new Set<number>()
+    for (const g of snapshot.grenades) {
+      liveGrenadeIds.add(g.id)
+      let mesh = this.grenadeMeshes.get(g.id)
+      if (!mesh) {
+        mesh = createGrenadeMesh(g.crew)
+        this.worldScene.add(mesh)
+        this.grenadeMeshes.set(g.id, mesh)
+      }
+      mesh.position.set(g.x, g.y, g.z)
+      const speed = Math.hypot(g.vx, g.vy, g.vz)
+      if (speed > 0.35) {
+        mesh.rotation.x += 0.14
+        mesh.rotation.z += 0.11
+      }
+    }
+    for (const [id, mesh] of this.grenadeMeshes.entries()) {
+      if (!liveGrenadeIds.has(id)) {
+        this.worldScene.remove(mesh)
+        disposeObject3D(mesh)
+        this.grenadeMeshes.delete(id)
+      }
+    }
+
+    // 10. Planted Remote C4 Ink Satchels [B]
+    const liveSatchelIds = new Set<number>()
+    const upAxis = new THREE.Vector3(0, 1, 0)
+    const normalVec = new THREE.Vector3()
+    for (const s of snapshot.satchels) {
+      liveSatchelIds.add(s.id)
+      let entry = this.satchelMeshes.get(s.id)
+      if (!entry) {
+        entry = createSatchelMesh(s.crew)
+        this.worldScene.add(entry.group)
+        this.satchelMeshes.set(s.id, entry)
+      }
+      entry.group.position.set(s.x, s.y, s.z)
+      normalVec.set(s.nx, s.ny, s.nz)
+      if (normalVec.lengthSq() > 0.01) {
+        normalVec.normalize()
+        entry.group.quaternion.setFromUnitVectors(upAxis, normalVec)
+      }
+    }
+    for (const [id, entry] of this.satchelMeshes.entries()) {
+      if (!liveSatchelIds.has(id)) {
+        this.worldScene.remove(entry.group)
+        disposeObject3D(entry.group)
+        this.satchelMeshes.delete(id)
+      }
+    }
   }
 
   private syncActiveMural(snapshot: MatchSnapshot, nowMs: number): void {
@@ -1242,6 +1375,12 @@ export class BellYardScene {
 
     for (const f of snapshot.fighters) {
       activeSlots.add(f.slotId)
+      const heldWeapon: HeldWeaponId =
+        f.activeSlot === 3
+          ? "commandoKnife"
+          : f.activeSlot === 1
+            ? f.primaryGun
+            : "proofPistol"
       const gunId: GunId = f.activeSlot === 1 ? f.primaryGun : "proofPistol"
 
       if (f.slotId === localSlotId) {
@@ -1250,6 +1389,8 @@ export class BellYardScene {
         this.smoothOffsetX *= decay
         this.smoothOffsetY *= decay
         this.smoothOffsetZ *= decay
+        this.hurtFlinchTimer = Math.max(0, this.hurtFlinchTimer - dt)
+        this.vmKnifeSlashTimer = Math.max(0, this.vmKnifeSlashTimer - dt)
 
         if (f.alive) {
           const base = this.predictedKin ?? f
@@ -1260,52 +1401,91 @@ export class BellYardScene {
             base.y + this.smoothOffsetY + this.cameraEyeHeight,
             base.z + this.smoothOffsetZ
           )
-          this.camera.rotation.y = localYaw
-          this.camera.rotation.x = localPitch
 
-          // Sync 1st-person viewmodel (gloved hands, outfit sleeves, active gun)
-          const vmKey = `${f.crew}:${f.cosmetics.top}:${f.cosmetics.swatch}:${gunId}`
+          // Smooth ADS & Press Sniper 24° optic FOV zoom!
+          const isSniperScoped =
+            f.ads && f.activeSlot === 1 && Boolean(GUNS[f.primaryGun].hasScope)
+          const targetFov = isSniperScoped ? 24 : f.ads ? 55 : 78
+          const nextFov = this.currentFov + (targetFov - this.currentFov) * (1 - Math.exp(-16 * dt))
+          if (Math.abs(nextFov - this.currentFov) > 0.05) {
+            this.currentFov = nextFov
+            this.camera.fov = nextFov
+            this.camera.updateProjectionMatrix()
+          }
+
+          // Camera aim + subtle recoil kick + incoming damage flinch roll
+          const flinchRoll =
+            this.hurtFlinchTimer > 0
+              ? Math.sin(this.hurtFlinchTimer * 44) * 0.042 * (this.hurtFlinchTimer / 0.16)
+              : 0
+          this.camera.rotation.y = localYaw + f.recoil.yaw * 0.75
+          this.camera.rotation.x = Math.max(-1.42, Math.min(1.42, localPitch + f.recoil.pitch * 0.75))
+          this.camera.rotation.z = flinchRoll
+
+          // Show Commando Knife blade during quick [F] jab or when equipped on [3]!
+          const showKnifeVm = heldWeapon === "commandoKnife" || f.meleeTicksLeft > 0 || this.vmKnifeSlashTimer > 0
+          const vmWeapon: HeldWeaponId = showKnifeVm ? "commandoKnife" : heldWeapon
+          const vmKey = `${f.crew}:${f.cosmetics.top}:${f.cosmetics.swatch}:${vmWeapon}`
           if (!this.viewmodel || this.viewmodel.key !== vmKey) {
             if (this.viewmodel) {
               this.vmScene.remove(this.viewmodel.root)
               disposeObject3D(this.viewmodel.root)
             }
-            this.viewmodel = createViewmodelRig(f.crew, f.cosmetics, gunId)
+            this.viewmodel = createViewmodelRig(f.crew, f.cosmetics, vmWeapon)
             this.vmScene.add(this.viewmodel.root)
           }
-          this.viewmodel.root.visible = true
+          // Hide 3D gun cleanly when looking through the Sniper Scope glass!
+          this.viewmodel.root.visible = !(isSniperScoped && this.currentFov < 42 && !showKnifeVm)
 
-          // Walk bob + recoil kick + reload dip animation!
+          // Walk bob + recoil kick + ADS tuck + reload dip + knife slash animation!
           const horizSpeed = Math.hypot(base.vx, base.vz)
           if (horizSpeed > 0.3 && base.grounded) {
             this.vmWalkPhase += dt * 10.5
           }
           this.vmRecoil = Math.max(0, this.vmRecoil - dt * 6.5)
           this.vmMuzzleTimer = Math.max(0, this.vmMuzzleTimer - dt)
-          this.viewmodel.muzzleLight.visible = this.vmMuzzleTimer > 0
+          this.viewmodel.muzzleLight.visible = !showKnifeVm && this.vmMuzzleTimer > 0
           if (this.vmMuzzleTimer > 0) {
             this.viewmodel.muzzleLight.rotation.z += dt * 28
           }
 
+          const targetAds = f.ads && !showKnifeVm ? 1 : 0
+          this.vmAdsBlend += (targetAds - this.vmAdsBlend) * (1 - Math.exp(-16 * dt))
+
           const reloadDef = GUNS[gunId].reloadTicks
           this.vmReloadProgress =
-            f.reloadTicksLeft > 0 ? 1 - f.reloadTicksLeft / Math.max(1, reloadDef) : 0
+            !showKnifeVm && f.reloadTicksLeft > 0 ? 1 - f.reloadTicksLeft / Math.max(1, reloadDef) : 0
           const reloadDip = Math.sin(this.vmReloadProgress * Math.PI) * 0.24
 
-          const bobX = Math.cos(this.vmWalkPhase) * 0.012
-          const bobY = Math.abs(Math.sin(this.vmWalkPhase)) * 0.014
-          this.viewmodel.gunPivot.position.set(
-            0.28 + bobX,
-            -0.25 - bobY - reloadDip,
-            -0.48 + this.vmRecoil * 0.09
-          )
+          const bobScale = 1 - this.vmAdsBlend * 0.65
+          const bobX = Math.cos(this.vmWalkPhase) * 0.012 * bobScale
+          const bobY = Math.abs(Math.sin(this.vmWalkPhase)) * 0.014 * bobScale
+
+          const slashPhase =
+            f.meleeTicksLeft > 0
+              ? 1 - f.meleeTicksLeft / Math.max(1, KNIFE_SWING_TICKS)
+              : this.vmKnifeSlashTimer > 0
+                ? 1 - this.vmKnifeSlashTimer / 0.28
+                : 0
+          const slashArc = Math.sin(slashPhase * Math.PI)
+
+          const baseX = 0.28 * (1 - this.vmAdsBlend * 0.62) - slashArc * 0.24
+          const baseY = -0.25 + this.vmAdsBlend * 0.045 - bobY - reloadDip + slashArc * 0.05
+          const baseZ = -0.48 + this.vmRecoil * 0.09 - slashArc * 0.22 + this.vmAdsBlend * 0.04
+          this.viewmodel.gunPivot.position.set(baseX + bobX, baseY, baseZ)
           this.viewmodel.gunPivot.rotation.set(
-            this.vmRecoil * 0.22 - reloadDip * 1.9,
-            0,
-            reloadDip * 1.1
+            this.vmRecoil * 0.22 - reloadDip * 1.9 - slashArc * 0.55,
+            slashArc * 0.85,
+            reloadDip * 1.1 + slashArc * 0.72
           )
         } else {
           // Elevated tactical spectator angle over Bell Yard during 4s respawn
+          if (Math.abs(this.currentFov - 78) > 0.2) {
+            this.currentFov = 78
+            this.camera.fov = 78
+            this.camera.updateProjectionMatrix()
+          }
+          this.camera.rotation.z = 0
           this.camera.position.set(f.x * 0.45, 11.5, f.z * 0.45 + 9.0)
           this.camera.lookAt(0, 1.8, 0)
           if (this.viewmodel) this.viewmodel.root.visible = false
@@ -1314,14 +1494,14 @@ export class BellYardScene {
       }
 
       // Remote fighter (other human or bot): 3rd-person Inkline avatar with interpolation
-      const wantKey = `${f.crew}:${f.cosmetics.top}:${f.cosmetics.hat}:${f.cosmetics.swatch}:${f.armorType}:${gunId}`
+      const wantKey = `${f.crew}:${f.cosmetics.top}:${f.cosmetics.hat}:${f.cosmetics.swatch}:${f.armorType}:${heldWeapon}`
       let rv = this.remoteVisuals.get(f.slotId)
       if (!rv || rv.rig.key !== wantKey) {
         if (rv) {
           this.worldScene.remove(rv.rig.root)
           disposeObject3D(rv.rig.root)
         }
-        const rig = createAvatarRig(f.crew, f.cosmetics, f.armorType, gunId)
+        const rig = createAvatarRig(f.crew, f.cosmetics, f.armorType, heldWeapon)
         this.worldScene.add(rig.root)
         rv = {
           rig,
@@ -1418,13 +1598,22 @@ export class BellYardScene {
       let mesh = this.projectileMeshes.get(p.projectileId)
       if (!mesh) {
         const colorHex =
-          p.gunId === "linecaster"
-            ? 0x2c6ce0
-            : p.crew === 0
-              ? CREWS[0].colorHex
-              : CREWS[1].colorHex
-        const len = p.gunId === "linecaster" ? 0.95 : p.gunId === "broadside" ? 0.34 : 0.56
-        const rad = p.gunId === "linecaster" ? 0.075 : 0.045
+          p.gunId === "pressSniper"
+            ? 0xc29b58
+            : p.gunId === "linecaster"
+              ? 0x2c6ce0
+              : p.crew === 0
+                ? CREWS[0].colorHex
+                : CREWS[1].colorHex
+        const len =
+          p.gunId === "pressSniper"
+            ? 1.35
+            : p.gunId === "linecaster"
+              ? 0.95
+              : p.gunId === "broadside"
+                ? 0.34
+                : 0.56
+        const rad = p.gunId === "pressSniper" || p.gunId === "linecaster" ? 0.075 : 0.045
         const geo = new THREE.BoxGeometry(rad * 2, rad * 2, len)
         const mat = new THREE.MeshBasicMaterial({
           color: colorHex,
@@ -1461,6 +1650,7 @@ export class BellYardScene {
   public dispose(): void {
     this.abortCtrl.abort()
     this.resetMatchState()
+    this.combatFx.dispose()
     if (this.viewmodel) {
       this.vmScene.remove(this.viewmodel.root)
       disposeObject3D(this.viewmodel.root)
